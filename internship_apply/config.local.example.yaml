@@ -1,0 +1,13 @@
+# Your own internship_apply settings. Copy to config.local.yaml (git-ignored; the desktop app creates
+# it for you in its data folder). Anything here overrides config.yaml; a value left as TODO counts as
+# not set. The safety switches (dry_run, filling_enabled, allow_approved_submit) are NOT here on
+# purpose: they keep config.yaml's safe defaults unless you add them yourself.
+
+target_roles:                    # e.g. [Software Engineering Intern, Data Science Intern]
+  - TODO
+locations:                       # e.g. [Remote, New York]
+  - TODO
+remote_preference: any           # remote_only | remote_or_hybrid | any
+greenhouse_boards: [TODO]        # e.g. [stripe]; [] for none
+lever_companies: [TODO]          # e.g. [palantir]; [] for none
+user_agent_contact: "TODO"       # optional ("" for none)

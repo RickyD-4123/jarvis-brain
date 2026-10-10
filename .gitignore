@@ -14,6 +14,7 @@ config.json*
 # Your own values: never committed (start from the *.example files)
 config.local.yaml
 config.local.*
+!config.local.example.yaml
 personal_strings.local.txt
 profile.yaml
 listings.db
