@@ -1,0 +1,11 @@
+# Internship postings you found yourself: one link per line. Lines starting with # are ignored,
+# and anything after " #" on a line is a note to yourself.
+#
+# TO USE: copy this file to internship_apply/data/manual_urls.txt (git-ignored) and add your links there.
+#
+# Greenhouse and Lever links are read through their public APIs. Other sites are read only if
+# their robots.txt allows it and the page doesn't need a login; otherwise the link is just saved
+# for you to apply by hand. Sites in manual_only_domains (config.yaml) are never fetched.
+# mailto: links are saved as email applications.
+#
+# https://job-boards.greenhouse.io/example/jobs/1234567
