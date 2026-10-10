@@ -1,7 +1,7 @@
 {
   "name": "jarvis-desktop",
   "productName": "Jarvis",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Jarvis as a Windows desktop app: starts the local backend and opens the desk.",
   "author": "Jarvis",
   "license": "UNLICENSED",
@@ -32,13 +32,37 @@
       "!**/*.test.js"
     ],
     "extraResources": [
-      { "from": "build/backend/jarvis-backend", "to": "backend" },
-      { "from": "../config.example.json", "to": "templates/config.example.json" },
-      { "from": "../.env.example", "to": "templates/.env.example" },
-      { "from": "../internship_apply/profile.example.yaml", "to": "templates/internship_apply/profile.example.yaml" },
-      { "from": "../internship_apply/config.local.example.yaml", "to": "templates/internship_apply/config.local.example.yaml" },
-      { "from": "../internship_apply/manual_urls.example.txt", "to": "templates/internship_apply/manual_urls.example.txt" },
-      { "from": "../notes", "to": "templates/notes", "filter": ["**/*.md"] }
+      {
+        "from": "build/backend/jarvis-backend",
+        "to": "backend"
+      },
+      {
+        "from": "../config.example.json",
+        "to": "templates/config.example.json"
+      },
+      {
+        "from": "../.env.example",
+        "to": "templates/.env.example"
+      },
+      {
+        "from": "../internship_apply/profile.example.yaml",
+        "to": "templates/internship_apply/profile.example.yaml"
+      },
+      {
+        "from": "../internship_apply/config.local.example.yaml",
+        "to": "templates/internship_apply/config.local.example.yaml"
+      },
+      {
+        "from": "../internship_apply/manual_urls.example.txt",
+        "to": "templates/internship_apply/manual_urls.example.txt"
+      },
+      {
+        "from": "../notes",
+        "to": "templates/notes",
+        "filter": [
+          "**/*.md"
+        ]
+      }
     ],
     "asar": true,
     "win": {
