@@ -1,0 +1,2 @@
+# Build-only Python tools for npm run dist (not needed to run Jarvis).
+pyinstaller==6.22.3

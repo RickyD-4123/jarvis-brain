@@ -26,7 +26,7 @@ import re
 import sys
 from dataclasses import asdict, dataclass, field
 
-from internship_apply import PACKAGE_DIR, llm_budget, profile as profile_mod
+from internship_apply import USER_DIR, llm_budget, profile as profile_mod
 from internship_apply.listings import DB_PATH, Store
 from internship_apply.log import get_logger
 from internship_apply.safety import EMAIL_RE, PHONE_RE, model_json, redact, scrub_contact, string_map, untrusted_block
@@ -34,7 +34,7 @@ from internship_apply.scoring import TECH, profile_skills, skills_in
 
 log = get_logger("materials")
 
-OUTPUT_DIR = os.path.join(PACKAGE_DIR, "output")
+OUTPUT_DIR = os.path.join(USER_DIR, "output")
 MAX_BULLETS = 4
 MAX_PROJECTS = 3
 MAX_COURSEWORK = 6

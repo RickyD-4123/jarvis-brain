@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "profile.yaml")
+DEFAULT_PATH = os.path.join(os.environ["JARVIS_HOME"], "internship_apply", "data", "profile.yaml")     if os.environ.get("JARVIS_HOME") else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "profile.yaml")
 PLACEHOLDER_RE = re.compile(r"^\s*TODO\b", re.I)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 UNKNOWN = "(not provided)"

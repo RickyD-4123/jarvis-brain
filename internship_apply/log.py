@@ -15,10 +15,10 @@ import logging.handlers
 import os
 import threading
 
-from internship_apply import PACKAGE_DIR
+from internship_apply import USER_DIR
 from internship_apply.safety import redact
 
-LOG_DIR = os.path.join(PACKAGE_DIR, "logs")
+LOG_DIR = os.path.join(USER_DIR, "logs")
 LOG_FILE = "internship_apply.log"
 EVENTS_FILE = "applications.jsonl"
 _lock = threading.Lock()

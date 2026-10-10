@@ -217,13 +217,6 @@ const GRAPH = {
    "group": "team",
    "path": "notes/team/Team Meeting Notes October.md",
    "excerpt": "October 2, 2026. Attendees: Maya, Dan, Priya, and 6 of 7 baristas.\n\n1. Prices: the Pricing Strategy changes go live Nov 1. Staff should say \"our green coffee costs went up a lot this year\" if asked. No need to apologise.\n2. Holiday: gift box presale Nov 1. Packers start the same day; see the Holiday Gift Box Campaign and Hiring Plan.\n3. Loyalty relaunch: move from punch cards to the app on Oct 30; baristas will get a 15-minute walkthrough. See Loyalty Program.\n4. Customer feedback: wait times at the 8am rush came up again in the Customer Feedback Summary. Trial a dedicated mobile-order station.\n5. Espresso machine: group 3 is fixed (see Equipment Maintenance Log).\n\nAction items: Priya to…"
-  },
-  {
-   "id": 31,
-   "label": "Preflight Probe Code Is Zephyr 5114",
-   "group": "captures",
-   "path": "notes/captures/Preflight Probe Code Is Zephyr 5114.md",
-   "excerpt": "Captured: 2026-10-10\n\nThe preflight probe code is Zephyr 5114."
   }
  ],
  "links": [

@@ -8,8 +8,11 @@ import os
 import re
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-NOTES_DIR = os.path.join(ROOT, "notes")
-OUT_FILE = os.path.join(ROOT, "viewer", "graph-data.js")
+# JARVIS_HOME (set by the desktop app): your notes and the generated graph live in the per-user data
+# folder instead of next to the code. Unset (the web version): notes/ and viewer/graph-data.js here.
+HOME = os.environ.get("JARVIS_HOME")
+NOTES_DIR = os.path.join(HOME or ROOT, "notes")
+OUT_FILE = os.path.join(HOME, "graph-data.js") if HOME else os.path.join(ROOT, "viewer", "graph-data.js")
 EXCERPT_LEN = 700
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]")
@@ -112,7 +115,7 @@ def main():
     graph = build_graph(notes)
     write_graph(graph)
     print(f"Indexed {len(graph['nodes'])} notes, {len(graph['links'])} links -> "
-          f"{os.path.relpath(OUT_FILE, ROOT)}")
+          f"{OUT_FILE}")
 
 
 if __name__ == "__main__":

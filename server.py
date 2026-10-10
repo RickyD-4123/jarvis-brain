@@ -291,8 +291,13 @@ import standing
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VIEWER_DIR = os.path.join(ROOT, "viewer")
-CONFIG_PATH = os.path.join(ROOT, "config.json")
-HOST, PORT = "127.0.0.1", 4700
+# Where your own files live: config.json, secrets/, data/, notes/. The web version keeps them next to
+# the code (HOME == ROOT); the desktop app sets JARVIS_HOME to its per-user data folder, so
+# reinstalling or updating the app never touches them. JARVIS_PORT: the desktop app picks a free port.
+HOME = os.path.realpath(os.environ.get("JARVIS_HOME") or ROOT)
+CONFIG_PATH = os.path.join(HOME, "config.json")
+HOST, PORT = "127.0.0.1", int(os.environ.get("JARVIS_PORT") or 4700)
+VERSION = os.environ.get("JARVIS_VERSION") or "dev"
 TOP_K = 6
 HISTORY_TURNS = 6          # question/answer pairs kept for follow-ups
 CLAUDE_TIMEOUT = 180       # seconds
@@ -364,8 +369,21 @@ def load_config():
 
 
 def find_claude():
-    """Locate the Claude Code executable, skipping the npm .cmd shim on Windows."""
+    """Locate the Claude Code executable, skipping the npm .cmd shim on Windows. JARVIS_CLAUDE (set by the
+    desktop app, which runs the same search itself) wins; then PATH; then the usual install folders, for
+    an app started from the Start menu with a shorter PATH than your terminal's."""
+    given = os.environ.get("JARVIS_CLAUDE")
+    if given and os.path.isfile(given):
+        return given
     path = shutil.which("claude")
+    if not path:
+        home = os.path.expanduser("~")
+        for p in (os.path.join(os.environ.get("APPDATA", ""), "npm", "claude.cmd"),
+                  os.path.join(home, ".local", "bin", "claude.exe"),
+                  os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "claude", "claude.exe")):
+            if os.path.isfile(p):
+                path = p
+                break
     if not path:
         sys.exit("Could not find the `claude` CLI on PATH. Install Claude Code and run `claude` once to sign in.")
     if path.lower().endswith((".cmd", ".ps1", ".bat")):
@@ -511,7 +529,7 @@ def write_capture(text, today=None):
         raise CaptureError(f"The file could not be written: {e.strerror or e}.") from e
 
     return {"label": os.path.splitext(os.path.basename(path))[0], "group": "captures",
-            "path": os.path.relpath(path, ROOT).replace(os.sep, "/"), "text": body}
+            "path": os.path.relpath(path, HOME).replace(os.sep, "/"), "text": body}
 
 
 # ---------------------------------------------------------------- sight
@@ -667,7 +685,7 @@ class Brain:
         for path in sorted((os.path.join(CAPTURE_DIR, f) for f in os.listdir(CAPTURE_DIR) if f.endswith(".md"))
                            if os.path.isdir(CAPTURE_DIR) else [], key=os.path.getmtime)[-3:]:
             self.activity.append((os.path.getmtime(path), f"you filed a note: {os.path.splitext(os.path.basename(path))[0]}"))
-        self.google = gtools.Google(CONFIG_PATH, ROOT, PORT)
+        self.google = gtools.Google(CONFIG_PATH, HOME, PORT)
         self.hands = localhand.Hands(CONFIG_PATH, WORKSPACE_ROOT)
         # Internship applications: the same Claude call scores listings and writes materials.
         self.internships = gtools.internship_tools.Internships(
@@ -675,7 +693,7 @@ class Brain:
         self.toolchat = gtools.ToolChat(self.google, lambda prompt, sp: self.ask_claude(prompt, system_prompt=sp)[0],
                                         TOOL_SYSTEM_PROMPT, hands=self.hands, internships=self.internships)
         # Desk cards and reminders. Kept in data/, which is never served.
-        data_dir = os.path.join(ROOT, "data")
+        data_dir = os.path.join(HOME, "data")
         self.cards = desk.Cards(os.path.join(data_dir, "cards.json"))
         self.reminders = desk.Reminders(os.path.join(data_dir, "reminders.json"))
         self.desk_seen = 0.0                              # last time the open desk page polled
@@ -972,7 +990,7 @@ class Brain:
         env.pop("CLAUDECODE", None)  # allow launching from inside a Claude Code session
 
         proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", env=env, cwd=ROOT, timeout=timeout,
+                              errors="replace", env=env, cwd=HOME, timeout=timeout,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         answer, error, used = stream_result(proc.stdout)
         if not error and (proc.returncode != 0 or not answer):
@@ -1253,6 +1271,8 @@ class Handler(SimpleHTTPRequestHandler):
         ext = os.path.splitext(name)[1].lower()
         base = os.path.realpath(VIEWER_DIR)
         path = os.path.realpath(os.path.join(base, route.lstrip("/")))
+        if route == "/graph-data.js":                     # rebuilt at runtime: in HOME for the desktop app
+            base, path = os.path.dirname(os.path.realpath(build.OUT_FILE)), os.path.realpath(build.OUT_FILE)
         if (ext not in STATIC_TYPES or BACKUP_RE.search(name) or "\\" in route or "/." in route
                 or not path.startswith(base + os.sep) or not os.path.isfile(path)):
             return self.send_json(404, {"error": "not found"})
@@ -1368,6 +1388,8 @@ class Handler(SimpleHTTPRequestHandler):
         if refused:
             return self.refuse(*refused)
         route = self.path.split("?")[0]
+        if route == "/health":                            # the desktop app waits for this before opening a window
+            return self.send_json(200, {"ok": True, "app": "jarvis", "version": VERSION})
         if route in ("/oauth/start", gtools.REDIRECT_PATH, "/google/status"):
             if route == "/google/status":
                 status = self.brain.google.status()
@@ -1519,7 +1541,7 @@ def main(idle_exit=None):
     """Run the server. With idle_exit (seconds), stop by itself once no desk window has checked in
     for that long, so closing the window is enough to shut Jarvis down (the desk polls every 2 s;
     Chrome slows a background tab to about once a minute, so keep this well above 60)."""
-    locked = secure.lock_all()
+    locked = secure.lock_all(HOME)
     failed = [p for p, ok in locked if not ok]
     print(f"secrets: {len(locked) - len(failed)} file(s) and folder(s) locked to this account"
           + (f"; FAILED: {failed}" if failed else ""))

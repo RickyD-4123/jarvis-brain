@@ -1,0 +1,59 @@
+{
+  "name": "jarvis-desktop",
+  "productName": "Jarvis",
+  "version": "1.0.0",
+  "description": "Jarvis as a Windows desktop app: starts the local backend and opens the desk.",
+  "author": "Jarvis",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build:backend": "node scripts/build-backend.js",
+    "dist": "npm run build:backend && electron-builder --win nsis --publish never && npm run check:build",
+    "check:build": "python scripts/check_build.py",
+    "migrate-data": "node scripts/migrate-data.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "local.jarvis.desktop",
+    "productName": "Jarvis",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.test.js"
+    ],
+    "extraResources": [
+      { "from": "build/backend/jarvis-backend", "to": "backend" },
+      { "from": "../config.example.json", "to": "templates/config.example.json" },
+      { "from": "../.env.example", "to": "templates/.env.example" },
+      { "from": "../internship_apply/profile.example.yaml", "to": "templates/internship_apply/profile.example.yaml" },
+      { "from": "../internship_apply/config.local.example.yaml", "to": "templates/internship_apply/config.local.example.yaml" },
+      { "from": "../internship_apply/manual_urls.example.txt", "to": "templates/internship_apply/manual_urls.example.txt" },
+      { "from": "../notes", "to": "templates/notes", "filter": ["**/*.md"] }
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis",
+      "icon": "../viewer/jarvis.ico",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Jarvis",
+      "artifactName": "Jarvis-Setup-${version}.exe"
+    }
+  }
+}

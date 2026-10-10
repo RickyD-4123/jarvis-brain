@@ -30,7 +30,7 @@ import re
 import sys
 import urllib.parse
 
-from internship_apply import PACKAGE_DIR, load_config
+from internship_apply import USER_DIR, load_config
 from internship_apply.listings import DB_PATH, Store, domain_matches
 from internship_apply.log import get_logger
 
@@ -45,7 +45,7 @@ INACTIVE = {SKIPPED, REJECTED, WITHDRAWN}
 # company + role again in any later run.
 APPLIED_STATUSES = {AWAITING, APPROVED, SUBMITTED, INTERVIEWING, OFFER, REJECTED}
 FOLLOW_UP_DAYS = 14
-EXPORT_PATH = os.path.join(PACKAGE_DIR, "output", "applications.csv")
+EXPORT_PATH = os.path.join(USER_DIR, "output", "applications.csv")
 CSV_HEADERS = ["Company", "Role", "Location", "Fit score", "Status", "Date found", "Date submitted", "Deadline", "Link", "Notes"]
 
 # status -> the statuses it may move to. Anything else is an illegal jump.

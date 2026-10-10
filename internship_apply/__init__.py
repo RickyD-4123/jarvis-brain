@@ -14,9 +14,13 @@ import sys
 import yaml
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(PACKAGE_DIR, "data")
+# Your files (config.local.yaml, data/, output/, logs/) live here: next to the code for the web version,
+# or in the desktop app's per-user data folder (JARVIS_HOME) so updates never touch them. The shipped
+# defaults (config.yaml) always come from the code.
+USER_DIR = os.path.join(os.environ["JARVIS_HOME"], "internship_apply") if os.environ.get("JARVIS_HOME") else PACKAGE_DIR
+DATA_DIR = os.path.join(USER_DIR, "data")
 CONFIG_PATH = os.path.join(PACKAGE_DIR, "config.yaml")
-LOCAL_CONFIG_PATH = os.path.join(PACKAGE_DIR, "config.local.yaml")
+LOCAL_CONFIG_PATH = os.path.join(USER_DIR, "config.local.yaml")
 
 DEFAULTS = {
     "target_roles": [], "locations": [], "remote_preference": "any",
