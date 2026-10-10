@@ -2,6 +2,7 @@
 
     python scripts/check_no_personal_data.py            # every tracked file plus anything staged
     python scripts/check_no_personal_data.py --staged   # only what the next commit adds (the pre-commit hook)
+    python scripts/check_no_personal_data.py --include-untracked   # also new files git would add (not ignored)
 
 What it looks for:
   - every string listed in personal_strings.local.txt (git-ignored; one per line, # comments,
@@ -25,7 +26,8 @@ EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[
 FAKE_EMAIL_RE = re.compile(r"@(?:[\w-]+\.)*(?:example(?:\.com|\.org|\.net)?|test|invalid|localhost)$", re.I)
 PHONE_RE = re.compile(r"(?<![\w.])(?:\+\d{1,3}[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?![\w.])"
                       r"|(?<![\w.])\+\d{1,3}[ .-]\d{3,4}[ .-]\d{3}[ .-]?\d{3,4}(?![\w.])")
-FAKE_PHONE_RE = re.compile(r"555[ .-]?01\d\d|7700[ .-]?900")
+LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml"}
+FAKE_PHONE_RE =re.compile(r"555[ .-]?01\d\d|7700[ .-]?900")
 KEY_PATTERNS = [
     ("Anthropic/OpenAI key", r"\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}"),
     ("GitHub token", r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
@@ -49,7 +51,10 @@ def git(*args, binary=False):
     return out.stdout if binary else out.stdout.decode("utf-8", "replace")
 
 
-def files_to_scan(staged_only):
+def files_to_scan(staged_only, include_untracked=False):
+    if include_untracked:                              # also new files that `git add -A` would pick up
+        names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")
+        return [n for n in names if n]
     if staged_only:
         names = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").split("\0")
     else:
@@ -61,8 +66,12 @@ def staged_text(rel):
     """The index copy of a file (what a commit would hold), or None for binary files."""
     try:
         data = git("show", f":{rel}", binary=True)
-    except subprocess.CalledProcessError:              # deleted from the index: nothing to commit
-        return None
+    except subprocess.CalledProcessError:              # not in the index: untracked (read it) or deleted
+        try:
+            with open(os.path.join(ROOT, rel), "rb") as f:
+                data = f.read()
+        except OSError:
+            return None
     if b"\0" in data[:8192]:
         return None
     return data.decode("utf-8", "replace")
@@ -84,13 +93,16 @@ def scan_text(rel, text, strings):
     """[(file, line, kind, masked match)] for one file's text."""
     hits = []
     lowered = [(s, s.lower()) for s in strings]
+    # Generated lockfiles quote third-party package metadata (maintainers' addresses in deprecation
+    # notices): the generic email pattern is skipped there; your strings and key patterns still apply.
+    lockfile = os.path.basename(rel) in LOCKFILES
     for n, line in enumerate(text.splitlines(), 1):
         low = line.lower()
         for s, ls in lowered:
             if ls in low:
                 hits.append((rel, n, "personal string", mask(s)))
         for m in EMAIL_RE.finditer(line):
-            if not FAKE_EMAIL_RE.search(m.group()):
+            if not lockfile and not FAKE_EMAIL_RE.search(m.group()):
                 hits.append((rel, n, "email address", mask(m.group())))
         for m in PHONE_RE.finditer(line):
             if not FAKE_PHONE_RE.search(m.group()):
@@ -103,10 +115,10 @@ def scan_text(rel, text, strings):
     return hits
 
 
-def scan(staged_only=False):
+def scan(staged_only=False, include_untracked=False):
     """(hits, files scanned, number of personal strings or None when the list file is missing)."""
     strings = personal_strings()
-    hits, files = [], files_to_scan(staged_only)
+    hits, files = [], files_to_scan(staged_only, include_untracked)
     for rel in files:
         if rel == "personal_strings.local.txt":
             hits.append((rel, 0, "the personal strings list itself is staged", ""))
@@ -119,8 +131,9 @@ def scan(staged_only=False):
 
 def main(argv):
     staged_only = "--staged" in argv
+    include_untracked = "--include-untracked" in argv
     try:
-        hits, n_files, n_strings = scan(staged_only)
+        hits, n_files, n_strings = scan(staged_only, include_untracked)
     except (OSError, subprocess.CalledProcessError) as e:
         print(f"check_no_personal_data: can't list files with git ({e}). Run it inside the repo.")
         return 2
@@ -134,7 +147,8 @@ def main(argv):
               "Move the value into an ignored local file (config.local.yaml, config.json, data/...) and use a "
               "TODO or obviously fake value (Jane Doe, jane@example.com, 555-0100) in committed files.")
         return 1
-    print(f"OK: {n_files} {'staged' if staged_only else 'tracked'} file(s) clean "
+    kind = "tracked + new" if include_untracked else "staged" if staged_only else "tracked"
+    print(f"OK: {n_files} {kind} file(s) clean "
           f"({n_strings or 0} personal strings + generic patterns).")
     return 0
 
