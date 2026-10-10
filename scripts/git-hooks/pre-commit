@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuses a commit that would add personal data or a secret. Enabled by:
+#   git config core.hooksPath scripts/git-hooks
+exec python scripts/check_no_personal_data.py --staged

@@ -1,0 +1,56 @@
+# Secrets and keys: config.json and every copy of it (config.json.tmp, config.json.bak, ...).
+# config.example.json (all TODO) is the committed template.
+config.json*
+*.dpapi
+*token*
+*.token
+*.key
+*.pem
+.env
+.env.*
+*.env
+!.env.example
+
+# Your own values: never committed (start from the *.example files)
+config.local.yaml
+config.local.*
+personal_strings.local.txt
+profile.yaml
+listings.db
+manual_urls.txt
+*.db
+
+# Google OAuth token cache, cards, reminders, schedules: all local state
+secrets/
+data/
+
+# Tailored resumes, cover letters, answers, screenshots and logs (personal)
+internship_apply/output/
+internship_apply/logs/
+review.png
+screenshots/
+*.screenshot.png
+approval*.json
+
+# Python, Node, builds
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.virtualenv/
+node_modules/
+build/
+dist/
+*.egg-info/
+
+# Playwright browser downloads (Jarvis uses your installed Chrome)
+ms-playwright/
+.playwright/
+playwright-browsers/
+
+# Temp files and backups
+*.tmp
+*.bak
+*.orig
+*~
