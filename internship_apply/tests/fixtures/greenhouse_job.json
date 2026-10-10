@@ -1,0 +1,27 @@
+{
+ "absolute_url": "https://acme.example/jobs?gh_jid=555",
+ "data_compliance": [],
+ "internal_job_id": "556",
+ "location": {
+  "name": "Edinburgh, UK"
+ },
+ "metadata": null,
+ "id": 555,
+ "updated_at": "2026-10-01T09:00:00-04:00",
+ "requisition_id": "R-1",
+ "title": "Data Science Intern",
+ "company_name": "Globex",
+ "first_published": "2026-09-20T10:00:00-04:00",
+ "language": "en",
+ "application_deadline": null,
+ "content": "&lt;h2&gt;&lt;strong&gt;About the role&lt;/strong&gt;&lt;/h2&gt;&lt;p&gt;Build data software with our platform team.&lt;/p&gt;&lt;h3&gt;&lt;strong&gt;What you&amp;#39;ll do&lt;/strong&gt;&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;Ship features&lt;/li&gt;&lt;li&gt;Write tests&lt;/li&gt;&lt;/ul&gt;&lt;h3&gt;&lt;strong&gt;Minimum requirements&lt;/strong&gt;&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;Pursuing a degree in Computer Science&lt;/li&gt;&lt;li&gt;Experience with Python or C++&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;&lt;strong&gt;Preferred qualifications&lt;/strong&gt;&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Robotics coursework&lt;/li&gt;&lt;/ul&gt;",
+ "departments": [
+  {
+   "id": 1,
+   "name": "Engineering",
+   "child_ids": [],
+   "parent_id": null
+  }
+ ],
+ "offices": []
+}

@@ -1,0 +1,62 @@
+# internship_apply settings: neutral defaults, committed to git. No secrets and nothing personal here.
+# Put YOUR values (roles, locations, companies, contact) in config.local.yaml next to this file:
+# it is git-ignored and overrides anything set here. A value left as TODO counts as not set.
+# Keys go in config.json (git-ignored), like the rest of Jarvis.
+
+# What to look for
+target_roles:                    # e.g. [Software Engineering Intern, Data Science Intern]
+  - TODO
+locations:                       # e.g. [Remote, New York]
+  - TODO
+remote_preference: any           # remote_only | remote_or_hybrid | any
+
+# Where to look: public job-board APIs only (no logins, no scraping of pages that forbid it).
+# A company's board name is the last part of its job-board link:
+#   boards.greenhouse.io/stripe  or  job-boards.greenhouse.io/stripe  ->  stripe
+#   jobs.lever.co/palantir                                          ->  palantir
+greenhouse_boards: [TODO]        # e.g. [stripe]; [] for none
+lever_companies: [TODO]          # e.g. [palantir]; [] for none
+# Single postings from anywhere else: paste their links, one per line, into
+# internship_apply/data/manual_urls.txt
+
+# Being polite to the sites
+min_seconds_between_requests: 2  # per site; a longer Crawl-delay in the site's robots.txt wins
+user_agent_contact: "TODO"       # optional ("" for none): an email or link added to the User-Agent so sites can reach you
+
+# Filters and limits
+min_fit_score: 70                # listings scoring below this (0-100) are skipped
+max_applications_per_day: 5
+
+# How the fit score (0-100) is made. Weights are relative (they don't need to add up to 100).
+# A part that can't be judged (your profile or the listing doesn't say) counts as half marks.
+score_weights:
+  skills: 40                     # skills the listing asks for that your profile has
+  role: 10                       # title matches one of target_roles
+  location: 15                   # remote, or in one of your locations
+  graduation: 15                 # your expected graduation fits the year(s) the listing asks for
+  model: 30                      # Claude's own judgement (only when use_model_scoring is true)
+use_model_scoring: true          # false: deterministic score only, no tokens used
+model_prescore_threshold: 50     # only listings whose rules-only score (0-100) is at least this go to Claude
+
+# Claude usage. Every model call goes through Jarvis's Claude Code brain on your subscription
+# (no API key, nothing pay-per-use). These caps keep the internship work inside your usage limits;
+# when one is reached Jarvis stops asking Claude, says so, and finishes by the usual rules.
+max_llm_calls_per_run: 20        # one scoring pass, one set of materials, or one request to Jarvis
+max_llm_calls_per_day: 60        # all internship work together, per calendar day
+max_companies_per_run: 25
+max_requests_per_run: 100        # web requests per run, all sites together
+
+# Safety switches
+dry_run: true                    # true: plan and draft only, touch nothing on any site
+filling_enabled: false           # kill switch: false means no form is ever filled, whatever else is set
+allow_approved_submit: false     # true: may press submit, but only on applications you approved one by one
+headless_for_tests: true         # tests run the browser hidden, so nothing pops up on your screen
+
+# Tracker export. CSV always works (python -m internship_apply.tracker export).
+sheets_export_enabled: false     # Google Sheets export: not built yet (needs its own OAuth setup)
+
+# Sites that must NEVER be automated: listed for you to apply by hand.
+# Add big-company career sites that need an account or forbid automation in their terms
+# (match by domain, e.g. "careers.example.com" or "example.com").
+manual_only_domains:
+  - myworkdayjobs.com

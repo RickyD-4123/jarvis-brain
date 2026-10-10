@@ -1,0 +1,6 @@
+# Jarvis core uses only the Python standard library.
+# internship_apply:
+PyYAML==6.0.3    # reads internship_apply/config.yaml
+python-docx==1.2.0    # writes the tailored resume and cover letter as .docx
+fpdf2==2.8.9          # writes them as PDF (pure Python; embeds Windows' Arial so curly quotes and dashes print)
+playwright==1.63.0    # drives the browser for the form filler (uses your installed Chrome; no browser download)

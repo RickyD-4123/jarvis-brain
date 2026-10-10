@@ -1,0 +1,81 @@
+# Your applicant profile: the ONE place internship_apply gets facts about you.
+#
+# Every value starting with "TODO:" is a placeholder. Replace it with the real thing, or leave it:
+# a placeholder is treated as unknown, never guessed or filled in for you. Fields marked (required)
+# must be filled before any application material is drafted.
+#
+# Lists (coursework, experience, projects, skills) can have as many items as you like, or be left
+# empty ([]). Delete the example items below once you've added real ones.
+# Quote answers like "yes"/"no" if you like; unquoted yes/no work too.
+#
+# TO USE: copy this file to internship_apply/data/profile.yaml and fill in YOUR copy. data/ is
+# git-ignored and never served to the browser, so your copy stays on this computer. Never commit it.
+
+personal:
+  name: "TODO: your full name"                  # (required)
+  email: "TODO: jane@example.com"                # (required)
+  phone: "TODO: 555-0100"
+  city: "TODO: city, country"
+  linkedin: "TODO: https://www.linkedin.com/in/your-handle"
+  github: "TODO: https://github.com/your-handle"
+  portfolio: "TODO: https://your-site.example (or leave as TODO if none)"
+
+education:
+  university: "TODO: university name"           # (required)
+  degree: "TODO: e.g. BSc, BEng, BA"            # (required)
+  major: "TODO: e.g. Computer Science"          # (required)
+  expected_graduation: "TODO: YYYY-MM"          # (required)
+  gpa: "TODO: e.g. 3.8/4.0 or First-class (predicted); leave as TODO to never mention it"
+  relevant_coursework:
+    - "TODO: course name"
+    - "TODO: course name"
+
+experience:
+  - role: "TODO: job title"
+    organisation: "TODO: company or society"
+    dates: "TODO: e.g. Jun 2025 - Sep 2025"
+    bullets:
+      - "TODO: what you did and the result, ideally with a number"
+      - "TODO: another achievement"
+
+projects:
+  - name: "TODO: project name"
+    tech_stack: ["TODO: e.g. Python", "TODO: e.g. React"]
+    description: "TODO: one or two sentences: what it does and your part in it"
+    link: "TODO: https://github.com/your-handle/project (or leave as TODO)"
+
+skills:
+  languages: ["TODO: e.g. Python", "TODO: e.g. Java"]
+  frameworks: ["TODO: e.g. React", "TODO: e.g. Django"]
+  tools: ["TODO: e.g. Git", "TODO: e.g. Docker"]
+
+work_authorisation:
+  countries: ["TODO: countries you want to work in, e.g. United Kingdom"]
+  authorised_to_work: "TODO: yes or no"                 # (required) in those countries, without a new visa
+  requires_sponsorship_now: "TODO: yes or no"           # (required)
+  requires_sponsorship_future: "TODO: yes or no"        # (required) e.g. for a graduate role later
+  notes: "TODO: anything forms often ask, e.g. visa type and expiry; or leave as TODO"
+
+availability:
+  start_date: "TODO: YYYY-MM-DD, or e.g. June 2027"     # (required)
+  term_length: "TODO: e.g. 10-12 weeks (summer), 6 months, 12-month placement"   # (required)
+
+# Reusable short answers, in your own words. Materials are drafted FROM these; a TODO one is
+# never written for you. Add more keys whenever a form asks something new.
+answers:
+  why_this_company: "TODO: what you look for in a company; tailored per listing later"
+  challenge_overcome: "TODO: a real challenge, what you did, and how it turned out"
+  teamwork: "TODO: a real example of working in a team"
+  leadership: "TODO: a real example of leading something"
+
+# Voluntary self-identification questions on application forms (gender, race/ethnicity, veteran
+# status, disability...). The form filler ALWAYS chooses "decline to answer" for these unless you
+# replace "decline" with the exact answer you want picked. This section is never sent to Claude.
+self_identification:
+  gender: "decline"
+  race_ethnicity: "decline"
+  veteran_status: "decline"
+  disability: "decline"
+  sexual_orientation: "decline"
+  transgender: "decline"
+  pronouns: "decline"
