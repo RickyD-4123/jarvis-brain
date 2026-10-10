@@ -1,0 +1,1897 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>
+  // Voice input: how long a pause (ms) must last before a spoken phrase counts as finished.
+  // Speech recognition finalises on every short pause; fragments are buffered until this
+  // much silence has passed, then sent as one sentence. 2.5 s lets you stop and think mid-thought.
+  const FINISH_MS = 2500;
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<link rel="icon" href="jarvis.ico">
+<style>
+  :root {
+    --bg: #000;
+    --panel: rgba(12, 14, 22, 0.86);
+    --border: rgba(255, 255, 255, 0.10);
+    --text: #e8eaf0;
+    --muted: #9aa0b4;
+    --accent: #7cc4ff;
+    /* The avatar has its own colours, set only by the Avatar Matrix theme (never by the UI theme). */
+    --av1: #7b2ff7;        /* deep purple */
+    --av2: #00c6ff;        /* electric blue */
+    --av-glow: 1;
+    --level: 0;            /* live voice level, 0..1, set every frame */
+  }
+  /* Orbitron (SIL Open Font License), bundled in viewer/: no font is fetched from the internet. */
+  @font-face { font-family: "Orbitron"; src: url("orbitron.woff2") format("woff2"); font-weight: 400 900; font-display: swap; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Inter, sans-serif; overflow: hidden; }
+  /* The avatar column owns the right side; the galaxy fills what's left. */
+  :root { --avw: clamp(260px, min(33vw, 100vh - 400px), 470px); --rightw: calc(var(--avw) + 56px); }
+  #graph { position: fixed; top: 0; bottom: 0; left: 0; right: var(--rightw); }
+
+  #title { position: fixed; top: 18px; left: 22px; pointer-events: none; }
+  #title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; }
+  #title p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+
+  #legend { position: fixed; top: 70px; left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+  #legend span { display: flex; align-items: center; gap: 8px; text-transform: capitalize; cursor: default; }
+  #legend i { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+
+  #panel { position: fixed; top: 0; left: 0; height: 100%; width: min(380px, 100%); z-index: 6;
+    background: var(--panel); backdrop-filter: blur(14px); border-right: 1px solid var(--border);
+    padding: 26px 24px 120px; overflow-y: auto; transform: translateX(-105%); transition: transform .35s ease; }
+  #panel.open { transform: none; }
+  #panel .group { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
+  #panel h2 { margin: 6px 0 14px; font-size: 21px; font-weight: 600; }
+  #panel .excerpt { white-space: pre-wrap; color: var(--text); opacity: .85; font-size: 14px; }
+  #panel h3 { margin: 22px 0 8px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  #panel .neighbours { display: flex; flex-wrap: wrap; gap: 6px; }
+  #panel .neighbours button { background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  #panel .neighbours button:hover { border-color: var(--accent); }
+  #close { position: absolute; top: 14px; right: 14px; background: none; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; }
+
+  #chat { position: fixed; left: calc((100% - var(--rightw)) / 2); bottom: 22px; transform: translateX(-50%);
+    width: min(720px, calc(100% - var(--rightw) - 40px)); z-index: 4; }
+  /* The conversation: a running, scrollable history. Each turn is one .turn. */
+  #answer { display: none; margin-bottom: 10px; padding: 6px 18px; background: var(--panel); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); border-radius: 14px; max-height: 42vh; overflow-y: auto; scroll-behavior: smooth; }
+  #answer.show { display: block; }
+  /* Collapsed (the default): only the current exchange shows. Expanded: the whole history, scrollable. */
+  #answer:not(.expanded) > :not(:last-child) { display: none; }
+  #answer:not(.expanded) > :last-child { border-bottom: 0; }
+  #answer.expanded { max-height: 62vh; }
+  #history { position: absolute; top: -13px; right: 18px; z-index: 5; display: none; align-items: center; gap: 6px;
+    padding: 3px 11px 3px 9px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 11px; letter-spacing: .06em;
+    color: var(--muted); background: var(--panel); border: 1px solid var(--border); backdrop-filter: blur(12px); }
+  #history:hover { color: var(--text); border-color: var(--accent); }
+  #history.show { display: inline-flex; }
+  #history svg { width: 12px; height: 12px; transition: transform .25s ease; }
+  #history[aria-expanded="true"] svg { transform: rotate(180deg); }
+  #answer .turn { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  #answer .turn:last-child { border-bottom: 0; }
+  #answer .divider { text-align: center; font-size: 11px; color: var(--muted); letter-spacing: .14em; text-transform: uppercase;
+    padding: 8px 0; border-bottom: 1px solid var(--border); }
+  #answer .q { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  #answer .sources { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  #answer .sources:empty { display: none; }
+  #answer .sources a { color: var(--accent); cursor: pointer; text-decoration: none; margin-right: 10px; }
+  #answer .turn.error .a { color: #ff9b9b; }
+  /* While a note is open on the left, the chat moves into the space between it and the avatar. */
+  body.panel-open #chat { left: calc(380px + (100% - 380px - var(--rightw)) / 2); width: min(720px, calc(100% - 380px - var(--rightw) - 40px)); }
+  form { display: flex; align-items: flex-end; gap: 8px; padding: 6px; background: var(--panel); backdrop-filter: blur(14px);
+    border: 1px solid var(--border); border-radius: 22px; }
+  /* The message box wraps and grows (up to ~6 lines) so long typed or spoken text stays visible. */
+  form textarea { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit;
+    line-height: 1.4; padding: 8px 14px; resize: none; overflow-y: auto; max-height: calc(6 * 1.4em + 16px); align-self: center; }
+  form button { border: 0; border-radius: 999px; padding: 8px 18px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #04121f; }
+  form button[disabled] { opacity: .5; cursor: wait; }
+  form button.ghost { background: transparent; color: var(--muted); font-weight: 400; padding: 8px 10px; }
+  #brain { padding: 4px 12px; background: var(--panel); backdrop-filter: blur(14px); border: 1px solid var(--border);
+    border-radius: 999px; font-size: 12px; color: var(--muted); letter-spacing: .04em; white-space: nowrap; }
+  #brain b { font-weight: 600; color: var(--text); }
+  #brain.custom { border-color: #c79bff; }
+  #brain.custom b { color: #c79bff; }
+  #brain.changing b { opacity: .5; }
+  #google { padding: 4px 12px; background: var(--panel); backdrop-filter: blur(14px); border: 1px solid var(--border);
+    border-radius: 999px; font: inherit; font-size: 12px; color: var(--muted); letter-spacing: .04em; cursor: pointer; white-space: nowrap; }
+  #google:hover { color: var(--text); }
+  #google.on { border-color: #6bf0a8; color: var(--text); }
+  #google.on b { color: #6bf0a8; font-weight: 600; }
+  #answer .sources a.receipt { color: #6bf0a8; }
+  #filter { padding: 4px 12px; background: var(--panel); backdrop-filter: blur(14px); border: 1px solid #c9a25e;
+    border-radius: 999px; font-size: 12px; color: #c9a25e; letter-spacing: .04em; white-space: nowrap; }
+  #filter[hidden] { display: none; }
+  #answer .a { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #answer .turn.flash { animation: flash 0.7s ease-in-out 4; border-radius: 10px; }
+  @keyframes flash { 50% { box-shadow: 0 0 0 3px #ffd35c, 0 0 40px 6px rgba(255,211,92,.55); background: rgba(60,48,12,.92); } }
+  #answer details { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  #answer details pre { white-space: pre-wrap; max-height: 220px; overflow: auto; margin: 6px 0 0; font: 11px/1.45 ui-monospace, Consolas, monospace; }
+  #answer .code { font: 600 34px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .18em; color: #ffd35c; margin: 6px 0; }
+  #status { display: flex; align-items: center; gap: 8px; width: fit-content; margin: 0; padding: 4px 12px;
+    background: var(--panel); backdrop-filter: blur(14px); border: 1px solid var(--border); border-radius: 999px;
+    font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+  #status i { width: 8px; height: 8px; border-radius: 50%; background: #5d6274; flex: none; }
+  #status[data-mode="listening"] i { background: #6bf0a8; animation: pulse 1.1s ease-in-out infinite; }
+  #status[data-mode="thinking"] i { background: #ffd35c; animation: pulse .6s ease-in-out infinite; }
+  #status[data-mode="speaking"] i { background: var(--accent); animation: pulse .8s ease-in-out infinite; }
+  #status b { font-weight: 600; color: var(--text); }
+  #status[data-mode="listening"] b { color: #6bf0a8; }
+  #status[data-mode="thinking"] b { color: #ffd35c; }
+  #status[data-mode="speaking"] b { color: var(--accent); }
+  #status[data-mode="asleep"] i { background: #b08840; animation: pulse 3s ease-in-out infinite; }
+  #status[data-mode="asleep"] b { color: #c9a25e; }
+  /* Asleep: the avatar dims to amber and grey, whatever its theme. */
+  #avatar.asleep { --av1: #a8742a; --av2: #6b6f76; --av-glow: .4; }
+  #avatar.asleep #reactor, #avatar.asleep #face { opacity: .62; transition: opacity .8s ease; }
+  #avatar #reactor, #avatar #face { transition: opacity .8s ease; }
+  #status .note { opacity: .8; }
+  @keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+  /* The + (attach) and screen buttons: round icons the height of the Ask button, quiet until hovered. */
+  form button.tool { display: grid; place-items: center; flex: none; width: 38.5px; height: 38.5px; padding: 0; border-radius: 50%;
+    background: transparent; color: var(--muted); transition: background .15s ease, color .15s ease; }
+  form button.tool:hover { background: rgba(255,255,255,.08); color: var(--text); }
+  form button.tool svg { width: 21px; height: 21px; }
+  form button.tool + button.tool { margin-left: -6px; }
+  form button.tool:disabled { opacity: .35; cursor: not-allowed; }
+  /* Clear the draft: only there while the box has something in it. */
+  form button.tool.clear svg { width: 19px; height: 19px; }
+  form button.tool.clear.empty { display: none; }
+  #attached { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  #attached:empty { display: none; }
+  #attached .chip { display: flex; align-items: center; gap: 6px; max-width: 260px; padding: 4px 6px 4px 12px; border-radius: 999px;
+    background: var(--panel); backdrop-filter: blur(14px); border: 1px solid var(--border); font-size: 12px; color: var(--text); }
+  #attached .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #attached .chip small { color: var(--muted); flex: none; }
+  #attached .chip button { flex: none; width: 20px; height: 20px; border: 0; border-radius: 50%; padding: 0; cursor: pointer;
+    background: rgba(255,255,255,.08); color: var(--muted); font: 14px/1 sans-serif; }
+  #attached .chip button:hover { color: var(--text); background: rgba(255,255,255,.16); }
+  @keyframes ring { 70% { box-shadow: 0 0 0 10px rgba(255,92,108,0); } 100% { box-shadow: 0 0 0 0 rgba(255,92,108,0); } }
+  /* Screen share: red button, a pill at the top and a red frame round the window while live. */
+  form button.tool.screen.on { background: #ff5c6c; color: #fff; animation: ring 1.4s infinite; }
+  #sharing { display: none; position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 20;
+    align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; background: #c8213a; color: #fff;
+    font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 0 24px rgba(255,60,80,.55); }
+  #sharing i { width: 9px; height: 9px; border-radius: 50%; background: #fff; animation: pulse 1s ease-in-out infinite; }
+  #sharing button { margin-left: 4px; border: 1px solid rgba(255,255,255,.6); background: transparent; color: #fff;
+    border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 11px; cursor: pointer; }
+  body.sharing #sharing { display: flex; }
+  body.sharing::after { content: ""; position: fixed; inset: 0; border: 3px solid #ff3c50; pointer-events: none; z-index: 19; }
+  #answer .frame { height: 54px; border-radius: 6px; vertical-align: middle; margin-right: 8px; border: 1px solid var(--border); }
+  .dots::after { content: ""; animation: dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+
+  /* ------------------------------------------------ right column: avatar + brain badge */
+  #rightcol { position: fixed; top: 58px; right: 28px; width: var(--avw); display: flex; flex-direction: column; align-items: center;
+    gap: 12px; z-index: 5; }
+  /* A faint HUD behind the column: grid lines and a soft glow, fading out at the edges. */
+  #rightcol::before { content: ""; position: absolute; inset: -18px -20px -18px -20px; z-index: -1; pointer-events: none; border-radius: 24px;
+    background:
+      radial-gradient(circle at 50% 46%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%),
+      repeating-linear-gradient(0deg, color-mix(in srgb, var(--accent) 7%, transparent) 0 1px, transparent 1px 26px),
+      repeating-linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent) 0 1px, transparent 1px 26px);
+    -webkit-mask: radial-gradient(ellipse 70% 62% at 50% 50%, #000 45%, transparent 100%);
+            mask: radial-gradient(ellipse 70% 62% at 50% 50%, #000 45%, transparent 100%); }
+  /* HUD panels with corner brackets. */
+  .hud { position: relative; width: 100%; padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); backdrop-filter: blur(10px); }
+  .hud::before, .hud::after { content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid var(--accent); opacity: .75; }
+  .hud::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; border-radius: 12px 0 0 0; }
+  .hud::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; border-radius: 0 0 12px 0; }
+  #hudtop { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  #hudtop .clock { font-family: Orbitron, Bahnschrift, sans-serif; font-weight: 600; font-size: 20px; letter-spacing: .08em; color: var(--text);
+    text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent); line-height: 1.1; }
+  #hudtop .date { font-family: Orbitron, Bahnschrift, sans-serif; font-size: 10px; letter-spacing: .2em; color: var(--muted); }
+  #hudtop .right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+  #hudtop #status { margin: 0; font-family: Orbitron, Bahnschrift, sans-serif; letter-spacing: .1em; }
+  #hudtop #status .note { display: none; }
+  #hint { width: 100%; margin-top: -6px; text-align: center; font-size: 11.5px; color: var(--muted); min-height: 1em; }
+  #systems { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+  #systems .k { font-family: Orbitron, Bahnschrift, sans-serif; font-size: 9.5px; letter-spacing: .18em; color: var(--muted); }
+  #systems .v { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #systems .v.on { color: #6bf0a8; }
+  #systems .wide { grid-column: 1 / -1; }
+  #avatar { position: relative; width: var(--avw); height: var(--avw); container-type: inline-size; }
+  #avatarMode { position: absolute; bottom: 4%; right: 4%; z-index: 3; width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); backdrop-filter: blur(10px); padding: 0; }
+  #avatarMode:hover { border-color: var(--av2); }
+  #avatarMode svg { width: 15px; height: 15px; }
+  #avatar[data-mode="reactor"] #face, #avatar[data-mode="face"] #reactor { display: none; }
+
+  /* Mode A: the arc reactor. Every layer is a CSS ring in the avatar gradient; --level (the live
+     voice) swells it, brightens it and speeds the inner rings. */
+  #reactor { position: absolute; inset: 0; display: grid; place-items: center;
+    transform: scale(calc(1 + var(--level) * .07)); transition: transform .12s ease-out, filter .12s ease-out;
+    filter: drop-shadow(0 0 calc((12px + var(--level) * 30px) * var(--av-glow)) var(--av1))
+            drop-shadow(0 0 calc((7px + var(--level) * 18px) * var(--av-glow)) var(--av2)); }
+  #reactor > * { position: absolute; border-radius: 50%; }
+  #reactor .halo { inset: -6%; background: radial-gradient(circle, color-mix(in srgb, var(--av2) 22%, transparent) 0 30%,
+    color-mix(in srgb, var(--av1) 14%, transparent) 48%, transparent 70%); opacity: calc(.55 + var(--level) * .45); filter: blur(6px); transition: opacity .15s ease-out; }
+  #reactor .bezel { inset: 1%; background: repeating-conic-gradient(color-mix(in srgb, var(--av2) 85%, #fff) 0 .5deg, transparent .5deg 3deg);
+    -webkit-mask: radial-gradient(closest-side, transparent 95%, #000 96%, #000 99%, transparent 100%);
+            mask: radial-gradient(closest-side, transparent 95%, #000 96%, #000 99%, transparent 100%); opacity: .55; }
+  #reactor .bezel2 { inset: 1%; background: repeating-conic-gradient(#fff 0 1.2deg, transparent 1.2deg 30deg);
+    -webkit-mask: radial-gradient(closest-side, transparent 92%, #000 93%, #000 99%, transparent 100%);
+            mask: radial-gradient(closest-side, transparent 92%, #000 93%, #000 99%, transparent 100%); opacity: .7; animation: spin 60s linear infinite; }
+  #reactor .band { inset: 6%; background: conic-gradient(from 0deg, var(--av1), var(--av2), var(--av1), var(--av2), var(--av1));
+    -webkit-mask: radial-gradient(closest-side, transparent 90%, #000 91%, #000 98%, transparent 99%);
+            mask: radial-gradient(closest-side, transparent 90%, #000 91%, #000 98%, transparent 99%); animation: spin 16s linear infinite; }
+  #reactor .segs { inset: 11%; background: repeating-conic-gradient(var(--av2) 0 22deg, transparent 22deg 30deg);
+    -webkit-mask: radial-gradient(closest-side, transparent 84%, #000 85%, #000 97%, transparent 98%);
+            mask: radial-gradient(closest-side, transparent 84%, #000 85%, #000 97%, transparent 98%);
+    animation: spin 28s linear infinite reverse; opacity: .92; }
+  #reactor .dash { inset: 19%; background: repeating-conic-gradient(color-mix(in srgb, var(--av1) 70%, #fff) 0 3deg, transparent 3deg 9deg);
+    -webkit-mask: radial-gradient(closest-side, transparent 94%, #000 95%, #000 99%, transparent 100%);
+            mask: radial-gradient(closest-side, transparent 94%, #000 95%, #000 99%, transparent 100%); animation: spin 11s linear infinite; }
+  #reactor .sweep { inset: 11%; opacity: calc(.7 + var(--level) * .3); transition: opacity .15s ease-out; background: conic-gradient(from 0deg, transparent 0 78%, color-mix(in srgb, var(--av2) 55%, transparent) 99%, transparent 100%);
+    -webkit-mask: radial-gradient(closest-side, transparent 30%, #000 31%, #000 84%, transparent 85%);
+            mask: radial-gradient(closest-side, transparent 30%, #000 31%, #000 84%, transparent 85%); animation: spin 4s linear infinite; }
+  #reactor .arcs { inset: 23%; background: conic-gradient(from 90deg, transparent 0 6%, var(--av1) 6% 22%, transparent 22% 31%,
+    var(--av2) 31% 47%, transparent 47% 56%, var(--av1) 56% 72%, transparent 72% 81%, var(--av2) 81% 97%, transparent 97%);
+    -webkit-mask: radial-gradient(closest-side, transparent 86%, #000 87%, #000 98%, transparent 99%);
+            mask: radial-gradient(closest-side, transparent 86%, #000 87%, #000 98%, transparent 99%);
+    animation: spin 14s linear infinite reverse; }
+  /* The Mark II triangle: a glowing outline (two clipped layers), turning slowly. */
+  #reactor .tri { inset: 27%; border-radius: 0; animation: spin 40s linear infinite; }
+  #reactor .tri::before, #reactor .tri::after { content: ""; position: absolute; inset: 0;
+    clip-path: polygon(50% 2%, 97% 83%, 3% 83%); }
+  #reactor .tri::before { background: linear-gradient(160deg, var(--av2), var(--av1)); opacity: calc(.8 + var(--level) * .2); }
+  #reactor .tri::after { inset: 7%; background: #05070d; clip-path: polygon(50% 6%, 92% 80%, 8% 80%); }
+  #reactor .inner { inset: 30%; border: 2px solid var(--av2); box-shadow: inset 0 0 26px var(--av1), 0 0 18px var(--av2);
+    opacity: calc(.7 + var(--level) * .3); }
+  #reactor .core { inset: 31%; display: grid; place-items: center;
+    background: radial-gradient(circle, #ffffff 0 9%, color-mix(in srgb, var(--av2) 80%, #fff) 22%, var(--av2) 38%, var(--av1) 66%, #0b0820 76%);
+    box-shadow: 0 0 calc(30px + var(--level) * 50px) color-mix(in srgb, var(--av2) 70%, transparent), inset 0 0 22px rgba(255,255,255,.4);
+    transform: scale(calc(.97 + var(--level) * .1)); transition: transform .12s ease-out, box-shadow .12s ease-out;
+    animation: breathe 6s ease-in-out infinite; }
+  @keyframes breathe { 50% { filter: brightness(1.12); } }
+  #reactor .core span { font-family: Orbitron, Bahnschrift, "Segoe UI", sans-serif; font-weight: 800; font-size: 3cqw;
+    letter-spacing: .16em; margin-right: -.16em; color: #fff; white-space: nowrap;
+    /* a dark outline first (legible on the white-hot centre), then the glow */
+    text-shadow: 0 0 1px #0b0820, 0 0 3px rgba(8, 6, 26, .95), 0 0 7px rgba(8, 6, 26, .7), 0 0 16px var(--av2), 0 0 28px var(--av1); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Mode B: the particle face, drawn on this canvas by Three.js. */
+  #face { position: absolute; inset: 0; width: 100%; height: 100%;
+    filter: drop-shadow(0 0 calc((10px + var(--level) * 40px) * var(--av-glow)) var(--av1)); }
+
+  /* The brain badge: a glowing pill under the avatar; opens the model menu. */
+  #brain { position: relative; padding: 7px 16px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px;
+    letter-spacing: .06em; white-space: nowrap; color: var(--muted); background: var(--panel); backdrop-filter: blur(14px);
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 0 10px color-mix(in srgb, var(--accent) 18%, transparent); }
+  #brain:hover { box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 0 12px color-mix(in srgb, var(--accent) 25%, transparent); }
+  #brain::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 8px var(--accent); vertical-align: 1px; }
+  #modelmenu { position: absolute; z-index: 6; top: calc(var(--avw) + 150px); width: 250px; max-height: 46vh; overflow-y: auto; padding: 6px; background: var(--panel); backdrop-filter: blur(16px);
+    border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+  #modelmenu[hidden] { display: none; }
+  #modelmenu .hint { padding: 6px 10px; font-size: 11px; color: var(--muted); }
+  #modelmenu button { display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 8px; padding: 7px 10px;
+    border: 0; border-radius: 9px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+  #modelmenu button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #modelmenu button:disabled { opacity: .4; cursor: not-allowed; }
+  #modelmenu button small { color: var(--muted); font-size: 11px; }
+  #modelmenu button.current { box-shadow: inset 0 0 0 1px var(--accent); }
+
+  /* ------------------------------------------------ settings drawer */
+  #mic { position: fixed; top: 16px; right: 106px; z-index: 30; width: 36px; height: 36px; border-radius: 50%; display: grid;
+    place-items: center; cursor: pointer; color: var(--text); background: var(--panel); border: 1px solid var(--border);
+    backdrop-filter: blur(10px); padding: 0; transition: color .15s ease, border-color .15s ease, background .15s ease; }
+  #mic:hover { border-color: var(--accent); }
+  #mic svg { width: 17px; height: 17px; }
+  #mic .slash { display: none; }
+  #mic[aria-pressed="true"] { color: #ff6b6b; border-color: #ff6b6b; background: rgba(255,107,107,.12); }
+  #mic[aria-pressed="true"] .slash { display: inline; }
+  #power { position: fixed; top: 16px; right: 62px; z-index: 30; width: 36px; height: 36px; border-radius: 50%; display: grid;
+    place-items: center; cursor: pointer; color: var(--text); background: var(--panel); border: 1px solid var(--border);
+    backdrop-filter: blur(10px); padding: 0; }
+  #power:hover { color: #ff6b6b; border-color: #ff6b6b; }
+  #power svg { width: 17px; height: 17px; }
+  body.offline #rightcol, body.offline #chat, body.offline #graph { opacity: .35; filter: grayscale(.7); transition: opacity .6s ease; }
+  #status[data-mode="offline"] i { background: #ff6b6b; }
+  #status[data-mode="offline"] b { color: #ff6b6b; }
+  #gear { position: fixed; top: 16px; right: 18px; z-index: 30; width: 36px; height: 36px; border-radius: 50%; display: grid;
+    place-items: center; cursor: pointer; color: var(--text); background: var(--panel); border: 1px solid var(--border);
+    backdrop-filter: blur(10px); padding: 0; }
+  #gear svg { width: 18px; height: 18px; transition: transform .4s ease; }
+  #gear:hover svg { transform: rotate(60deg); }
+  #settings { position: fixed; top: 0; right: 0; height: 100%; width: min(360px, 100%); z-index: 29; padding: 64px 22px 30px;
+    overflow-y: auto; background: var(--panel); backdrop-filter: blur(18px); border-left: 1px solid var(--border);
+    transform: translateX(105%); transition: transform .35s ease; }
+  #settings.open { transform: none; }
+  #settings h2 { margin: 0 0 4px; font-size: 13px; letter-spacing: .2em; text-transform: uppercase; }
+  #settings section { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
+  #settings h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  #settings label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; font-size: 13px; }
+  #settings select, #settings input[type="color"], #settings input[type="range"] { font: inherit; color: var(--text);
+    background: rgba(255,255,255,.06); border: 1px solid var(--border); border-radius: 8px; }
+  #settings select { padding: 5px 8px; min-width: 150px; }
+  #settings select option { background: #15171f; color: #e8eaf0; }
+  #settings input[type="color"] { width: 46px; height: 28px; padding: 2px; cursor: pointer; }
+  #settings .reset { margin-top: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 999px;
+    padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+  #settings .reset:hover { color: var(--text); }
+  #settings .note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  #settings .swatch { height: 10px; border-radius: 999px; margin-top: 10px; background: linear-gradient(90deg, var(--av1), var(--av2)); }
+
+  @media (max-width: 1180px) {
+    :root { --avw: clamp(240px, 30vw, 320px); }
+  }
+  @media (max-width: 760px) {
+    #legend { display: none; }
+    :root { --avw: 54px; --rightw: 0px; }
+    #rightcol::before, #hudtop .clock, #hudtop .date, #systems, #hint { display: none; }
+    .hud { padding: 0; border: 0; background: none; } .hud::before, .hud::after { display: none; }
+    #rightcol { position: fixed; top: 12px; right: 148px; width: auto; flex-direction: row; gap: 8px; }
+    #avatarMode { display: none; }
+    #modelmenu { position: absolute; top: 60px; right: 0; }
+    #chat { left: 16px; right: 16px; width: auto; transform: none; }
+    #panel { height: 55%; top: auto; bottom: 0; border-right: 0; border-top: 1px solid var(--border); transform: translateY(105%); }
+  }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+
+<div id="title">
+  <h1>Knowledge Galaxy</h1>
+  <p id="stats"></p>
+</div>
+<div id="legend"></div>
+<div id="sharing" role="status"><i></i>Screen shared · I look when you ask<button type="button" id="unshare">Stop</button></div>
+
+<aside id="panel" aria-live="polite">
+  <button id="close" aria-label="Close">×</button>
+  <div class="group" id="p-group"></div>
+  <h2 id="p-title"></h2>
+  <div class="excerpt" id="p-excerpt"></div>
+  <h3>Connected notes</h3>
+  <div class="neighbours" id="p-neighbours"></div>
+</aside>
+
+<div id="rightcol">
+  <div id="hudtop" class="hud">
+    <div><div class="clock" id="clock">--:--:--</div><div class="date" id="date"></div></div>
+    <div class="right">
+      <div id="status" data-mode="idle" role="status" aria-live="polite"><i></i><b>Ready</b><span class="note"></span></div>
+      <span id="filter" hidden title="A standing order is armed: only what can't wait is announced. Say &quot;I'm back&quot; to lift it.">Urgent only</span>
+    </div>
+  </div>
+  <div id="hint"></div>
+  <div id="avatar" data-mode="reactor" aria-hidden="true">
+    <button type="button" id="avatarMode" title="Switch avatar: reactor / face" aria-label="Switch avatar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+    </button>
+    <div id="reactor"><div class="halo"></div><div class="bezel"></div><div class="bezel2"></div><div class="band"></div><div class="segs"></div><div class="sweep"></div><div class="dash"></div><div class="arcs"></div><div class="tri"></div><div class="inner"></div><div class="core"><span>J.A.R.V.I.S.</span></div></div>
+    <canvas id="face"></canvas>
+  </div>
+  <button type="button" id="brain" aria-haspopup="listbox" aria-expanded="false" title="The model answering you. Click to choose another.">Brain: <b>…</b> <span></span></button>
+  <div id="modelmenu" role="listbox" hidden></div>
+  <div id="systems" class="hud">
+    <div><div class="k">MICROPHONE</div><div class="v" id="sysMic">Off</div></div>
+    <div><div class="k">GOOGLE</div><div class="v" id="sysGoogle">Off</div></div>
+    <div><div class="k">NOTES</div><div class="v" id="sysNotes">0</div></div>
+    <div><div class="k">REMINDERS</div><div class="v" id="sysRem">None</div></div>
+    <div class="wide"><div class="k">NEXT</div><div class="v" id="sysNext">Nothing scheduled</div></div>
+  </div>
+</div>
+
+<button type="button" id="mic" aria-pressed="false" aria-label="Mute microphone" title="Mute microphone">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/><path d="M8 22h8"/><path class="slash" d="M3 3l18 18"/></svg>
+</button>
+<button type="button" id="power" aria-label="Shut down Jarvis" title="Shut down Jarvis">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>
+</button>
+<button type="button" id="gear" aria-label="Systems settings" title="Systems settings">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+</button>
+<aside id="settings" aria-label="Systems settings">
+  <h2>Systems Settings</h2>
+  <section>
+    <h3>Google account</h3>
+    <button type="button" id="google" title="Let me read your calendar, mail and files, and save drafts (never send)">Connect Google</button>
+    <p class="note" id="googleNote"></p>
+  </section>
+  <section>
+    <h3>Interface theme</h3>
+    <label>Preset <select id="uiPreset"></select></label>
+    <label>Background <input type="color" id="uiBg"></label>
+    <label>Panels &amp; sidebars <input type="color" id="uiPanel"></label>
+    <label>Text <input type="color" id="uiText"></label>
+    <label>Accent <input type="color" id="uiAccent"></label>
+    <button type="button" class="reset" id="uiReset">Reset interface</button>
+  </section>
+  <section>
+    <h3>Avatar matrix theme</h3>
+    <label>Preset <select id="avPreset"></select></label>
+    <label>Gradient start <input type="color" id="av1"></label>
+    <label>Gradient end <input type="color" id="av2"></label>
+    <label>Glow <input type="range" id="avGlow" min="0" max="2" step="0.1"></label>
+    <div class="swatch"></div>
+    <button type="button" class="reset" id="avReset">Reset avatar</button>
+    <p class="note">Only the reactor and the face use these colours.</p>
+  </section>
+</aside>
+
+<div id="chat">
+  <button type="button" id="history" aria-expanded="false" aria-controls="answer" title="Show what we talked about earlier">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg><span>Earlier</span>
+  </button>
+  <div id="answer" role="log" aria-live="polite"></div>
+  <div id="attached" aria-label="Attached files"></div>
+  <form id="ask">
+    <button type="button" class="tool" id="attach" title="Attach files from your computer" aria-label="Attach files">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <input type="file" id="files" multiple hidden
+           accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/*,.md,.csv,.json,.py,.js,.ts,.java,.c,.cpp,.cs,.go,.rs,.sql,.yaml,.yml,.tex,.log">
+    <button type="button" class="tool screen" id="screen" title="Share your screen so I can see it" aria-label="Share screen" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2.2"/><path d="M8.5 21h7M12 17v4"/></svg>
+    </button>
+    <textarea id="q" rows="1" autocomplete="off" placeholder="What can I do for you today?" aria-label="Message"></textarea>
+    <button type="button" class="tool clear empty" id="clear" title="Clear this message (or say “scratch that”)" aria-label="Clear message">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="M17.5 9.5l-5 5M12.5 9.5l5 5"/></svg>
+    </button>
+    <button type="button" class="ghost" id="reset" title="Start a new conversation">New</button>
+    <button type="submit" id="send">Ask</button>
+  </form>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js" integrity="sha384-RRHfJ6w1mTlKUBMYT/hvnRiOzEB/vyRV3DrQOseb6oYfvaZSfdd0byS4bHps0k2R" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js" integrity="sha384-GNPicn8pBA2/PGSyPTpxIlPurgLUYcNYJ2zskIq782dE9+gp5E32WSyuxZqA7J+u" crossorigin="anonymous"></script>
+<script src="graph-data.js"></script>
+<script>
+(() => {
+  // Everything from outside (model answers, notes, email, documents, tool results) goes through esc()
+  // before it becomes HTML, and every link through link(): http and https only, anything else is text.
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  function safeUrl(u) {
+    try { const url = new URL(String(u), location.href); return /^https?:$/.test(url.protocol) ? url.href : null; }
+    catch { return null; }
+  }
+  const link = (u, label, cls = "") => {
+    const href = safeUrl(u);
+    return href ? `<a class="${esc(cls)}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : esc(label);
+  };
+  const PALETTE = ["#ff8a5c", "#5cc8ff", "#b48cff", "#6bf0a8", "#ffd35c", "#ff6fae", "#7ce0e6", "#c9e86b"];
+  // Captures always come last, so adding them never shifts the other folders' colours.
+  const groups = [...new Set(GRAPH.nodes.map(n => n.group))].sort((a, b) =>
+    (a === "captures") - (b === "captures") || a.localeCompare(b));
+  const colorOf = g => PALETTE[groups.indexOf(g) % PALETTE.length];
+
+  // Neighbour lookup by node index (ids equal indexes).
+  const neighbours = GRAPH.nodes.map(() => new Set());
+  GRAPH.links.forEach(l => { neighbours[l.source].add(l.target); neighbours[l.target].add(l.source); });
+
+  // Stats and legend are redrawn whenever a capture joins the galaxy.
+  function renderMeta() {
+    document.getElementById("stats").textContent = `${GRAPH.nodes.length} notes indexed · ${GRAPH.links.length} connections`;
+    document.getElementById("legend").innerHTML = groups.map(g =>
+      `<span style="color:${esc(colorOf(g))}"><i style="background:${esc(colorOf(g))}"></i><b style="color:var(--muted);font-weight:400">${esc(g)}</b></span>`).join("");
+  }
+  renderMeta();
+
+  // Soft radial glow texture shared by every node sprite.
+  const glowTexture = (() => {
+    const c = document.createElement("canvas"); c.width = c.height = 128;
+    const ctx = c.getContext("2d");
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.2, "rgba(255,255,255,.55)");
+    g.addColorStop(0.5, "rgba(255,255,255,.12)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
+  })();
+
+  let highlight = null; // Set of node ids, or null for "everything lit"
+  const isLit = id => !highlight || highlight.has(id);
+  const linkId = x => typeof x === "object" ? x.id : x;
+
+  const graphEl = document.getElementById("graph");
+  const Graph = ForceGraph3D()(graphEl)
+    .width(graphEl.clientWidth).height(graphEl.clientHeight)
+    .backgroundColor("#000000")
+    .showNavInfo(false)
+    .graphData(GRAPH)
+    .nodeId("id")
+    .nodeLabel(n => `<div style="padding:4px 8px;background:rgba(0,0,0,.7);border-radius:6px">${esc(n.label)}</div>`)
+    .nodeThreeObject(n => {
+      // Unlit core (true group colour) plus an additive glow sprite.
+      const color = colorOf(n.group), group = new THREE.Group();
+      const r = 2.6 + neighbours[n.id].size * 0.22;
+      const core = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshBasicMaterial({ color }));
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTexture, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.75 }));
+      glow.scale.set(r * 7, r * 7, 1);
+      group.add(core, glow);
+      n.__core = core; n.__glow = glow;
+      return group;
+    })
+    .linkColor(l => {
+      const lit = !highlight || (highlight.has(linkId(l.source)) && highlight.has(linkId(l.target)));
+      if (highlight && lit) return "rgba(255,255,255,0.85)";
+      if (highlight) return "rgba(255,255,255,0.03)";
+      return l.kind === "mention" ? "rgba(170,200,255,0.55)" : "rgba(170,200,255,0.12)";
+    })
+    .linkWidth(l => highlight && highlight.has(linkId(l.source)) && highlight.has(linkId(l.target)) ? 1.2 : 0)
+    .linkDirectionalParticles(l => highlight && highlight.has(linkId(l.source)) && highlight.has(linkId(l.target)) ? 3 : 0)
+    .linkDirectionalParticleWidth(1.6)
+    .linkDirectionalParticleSpeed(0.006)
+    .onNodeClick(n => focusNode(n.id))
+    .onBackgroundClick(() => { clearHighlight(); closePanel(); });
+
+  // Mentions pull tighter than shared-wikilink links so clusters stay readable.
+  Graph.d3Force("link").distance(l => l.kind === "mention" ? 55 : 110).strength(l => l.kind === "mention" ? 0.5 : 0.04);
+  Graph.d3Force("charge").strength(-140);
+
+  // Starfield.
+  (() => {
+    const N = 6000, pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const r = 1800 + Math.random() * 2600, t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
+      pos[i*3] = r * Math.sin(p) * Math.cos(t); pos[i*3+1] = r * Math.sin(p) * Math.sin(t); pos[i*3+2] = r * Math.cos(p);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const stars = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.8, depthWrite: false }));
+    Graph.scene().add(stars);
+  })();
+
+  // Slow idle rotation that pauses while the user is interacting.
+  let lastInteraction = 0, angle = 0;
+  const IDLE_MS = 6000, RADIUS = 520;
+  ["pointerdown", "wheel", "touchstart"].forEach(e => document.getElementById("graph").addEventListener(e, () => lastInteraction = Date.now(), { passive: true }));
+  Graph.cameraPosition({ x: 0, y: 60, z: RADIUS });
+  (function spin() {
+    if (Date.now() - lastInteraction > IDLE_MS && !panelOpen()) {
+      const cam = Graph.camera().position;
+      const r = Math.hypot(cam.x, cam.z) || RADIUS;
+      angle = Math.atan2(cam.x, cam.z) + 0.0012;
+      Graph.cameraPosition({ x: r * Math.sin(angle), y: cam.y, z: r * Math.cos(angle) });
+    }
+    requestAnimationFrame(spin);
+  })();
+
+  function refresh() {
+    GRAPH.nodes.forEach(n => {
+      if (!n.__core) return;
+      n.__glow.material.opacity = isLit(n.id) ? 0.75 : 0.03;
+      n.__core.material.color.set(isLit(n.id) ? colorOf(n.group) : "#22252e");
+    });
+    Graph.linkColor(Graph.linkColor()).linkWidth(Graph.linkWidth())
+         .linkDirectionalParticles(Graph.linkDirectionalParticles());
+  }
+  function clearHighlight() { highlight = null; refresh(); }
+
+  function flyTo(node) {
+    lastInteraction = Date.now();
+    const dist = 230, len = Math.hypot(node.x, node.y, node.z) || 1, k = 1 + dist / len;
+    Graph.cameraPosition({ x: node.x * k, y: node.y * k, z: node.z * k }, node, 1600);
+  }
+
+  function focusNode(id) {
+    const node = GRAPH.nodes[id];
+    highlight = new Set([id, ...neighbours[id]]);
+    refresh();
+    flyTo(node);
+    openPanel(node);
+  }
+
+  // A capture joins the running galaxy: same id the server gave it, born at its most related
+  // note, a glow pulse, then the camera flies over. No reload; graph-data.js already has it too.
+  function addNode(node, links, anchorId) {
+    if (GRAPH.nodes[node.id]) return;                         // already here (e.g. after a reload)
+    if (!groups.includes(node.group)) groups.push(node.group);
+    const anchor = GRAPH.nodes[anchorId];
+    const at = anchor && anchor.x !== undefined ? anchor : { x: 0, y: 0, z: 0 };
+    // Born on the anchor, then glides a short way outward to its resting place. It is pinned
+    // during the glide so the camera has a still target; the physics would otherwise fling an
+    // unlinked newcomer off to the edge of the galaxy.
+    const len = Math.hypot(at.x, at.y, at.z) || 1, out = 35;
+    const from = { x: at.x, y: at.y, z: at.z }, to = { x: at.x + at.x / len * out, y: at.y + at.y / len * out + 8, z: at.z + at.z / len * out };
+    Object.assign(node, { x: from.x, y: from.y, z: from.z, fx: from.x, fy: from.y, fz: from.z });
+    GRAPH.nodes[node.id] = node;
+    neighbours[node.id] = new Set();
+    links.forEach(l => {
+      GRAPH.links.push({ ...l });
+      neighbours[l.source].add(l.target); neighbours[l.target].add(l.source);
+    });
+    Graph.graphData({ nodes: GRAPH.nodes, links: GRAPH.links });
+    renderMeta();
+    pulse(node);
+    const start = performance.now(), GLIDE = 900;
+    (function glide(now) {
+      const t = Math.min((now - start) / GLIDE, 1), e = 1 - (1 - t) ** 3;
+      ["x", "y", "z"].forEach(k => node["f" + k] = node[k] = from[k] + (to[k] - from[k]) * e);
+      if (t < 1) return requestAnimationFrame(glide);
+      focusNode(node.id);
+      // Linked captures settle among their links once the camera is there; unlinked ones stay
+      // beside the note they most resemble.
+      if (links.length) setTimeout(() => { node.fx = node.fy = node.fz = undefined; }, 1800);
+    })(start);
+  }
+
+  // Swell the new star's glow a few times, then settle to its normal size.
+  function pulse(node) {
+    const start = performance.now(), MS = 2400;
+    (function frame(now) {
+      if (!node.__glow) return requestAnimationFrame(frame);   // sprite is created on the next render
+      if (!node.__base) node.__base = node.__glow.scale.x;
+      const t = Math.min((now - start) / MS, 1);
+      const k = 1 + 2.2 * Math.sin(t * Math.PI * 3) ** 2 * (1 - t);
+      node.__glow.scale.set(node.__base * k, node.__base * k, 1);
+      if (t < 1) requestAnimationFrame(frame);
+    })(start);
+  }
+
+  // Show where an answer came from. Intent is decided first: only answers that actually drew on
+  // notes may touch the camera. One to three sources: fly to the top one and open it. Four or
+  // more: light the whole cluster and stay put (picking one of six would misrepresent the answer).
+  const CLUSTER_MIN = 4;
+  function showSources(intent, ids) {
+    if (intent !== "notes" || !ids.length) return "still";   // small talk / not in the notes
+    if (ids.length >= CLUSTER_MIN) {
+      closePanel();
+      highlight = new Set(ids);
+      refresh();
+      return "cluster";
+    }
+    focusNode(ids[0]);                                       // top source + direct neighbours, fly, panel
+    ids.slice(1).forEach(i => highlight.add(i));             // the other one or two sources stay lit too
+    refresh();
+    return "fly";
+  }
+
+  // Side panel.
+  const panel = document.getElementById("panel");
+  function panelOpen() { return document.getElementById("panel").classList.contains("open"); }
+  let openNoteId = null;                     // what's open on the desk, for "call me"
+  function openPanel(n) {
+    openNoteId = n.id;
+    const g = document.getElementById("p-group");
+    g.textContent = n.group; g.style.color = colorOf(n.group);
+    document.getElementById("p-title").textContent = n.label;
+    document.getElementById("p-excerpt").textContent = n.excerpt;
+    const nb = document.getElementById("p-neighbours");
+    nb.innerHTML = neighbours[n.id].size ? "" : '<span style="color:var(--muted);font-size:12px">None yet</span>';
+    [...neighbours[n.id]].sort((a, b) => GRAPH.nodes[a].label.localeCompare(GRAPH.nodes[b].label)).forEach(i => {
+      const b = document.createElement("button");
+      b.textContent = GRAPH.nodes[i].label; b.style.borderColor = colorOf(GRAPH.nodes[i].group) + "66";
+      b.onclick = () => focusNode(i);
+      nb.appendChild(b);
+    });
+    panel.classList.add("open");
+    document.body.classList.add("panel-open");
+  }
+  function closePanel() { panel.classList.remove("open"); document.body.classList.remove("panel-open"); openNoteId = null; }
+  document.getElementById("close").onclick = () => { closePanel(); clearHighlight(); };
+
+  // Chat bar.
+  const form = document.getElementById("ask"), input = document.getElementById("q"), send = document.getElementById("send");
+  // The conversation feed: every exchange stacks as a .turn. A turn that is still "thinking" (it shows
+  // the dots) is updated in place when its answer arrives; anything else starts a new turn. The feed
+  // survives a reload of this tab (sessionStorage), and "New" draws a divider instead of wiping it.
+  const box = document.getElementById("answer");
+  const FEED_KEY = "jarvis.feed", FEED_MAX = 120;
+  let current = null;
+  function saveFeed() {
+    try { sessionStorage.setItem(FEED_KEY, box.innerHTML); } catch {}
+  }
+  function scrollFeed() { box.scrollTop = box.scrollHeight; updateHistory(); }
+  // The "Earlier" tab: shown once there's something before the current exchange; expands and collapses.
+  const historyBtn = document.getElementById("history");
+  function updateHistory() {
+    const earlier = Math.max(0, box.children.length - 1);
+    const open = box.classList.contains("expanded");
+    historyBtn.classList.toggle("show", earlier > 0 && box.classList.contains("show"));
+    historyBtn.setAttribute("aria-expanded", String(open));
+    historyBtn.querySelector("span").textContent = open ? "Hide earlier" : `Earlier (${earlier})`;
+  }
+  historyBtn.onclick = () => {
+    box.classList.toggle("expanded");
+    box.scrollTop = box.scrollHeight;               // land on the current exchange either way
+    updateHistory();
+  };
+  const setAnswer = (q, html, sources, isError) => {
+    const pending = current && current.isConnected && current.dataset.pending === "1" && current.dataset.q === q;
+    const turn = pending ? current : document.createElement("div");
+    if (!pending) {
+      turn.className = "turn";
+      turn.innerHTML = '<div class="q"></div><div class="a"></div><div class="sources"></div>';
+      box.appendChild(turn);
+      while (box.children.length > FEED_MAX) box.firstElementChild.remove();
+    }
+    turn.classList.toggle("error", !!isError);
+    turn.dataset.q = q;
+    turn.querySelector(".q").textContent = q;
+    turn.querySelector(".a").innerHTML = html;
+    turn.querySelector(".sources").innerHTML = sources || "";
+    turn.dataset.pending = /class="dots"/.test(html) ? "1" : "0";
+    current = turn;
+    box.classList.add("show");
+    scrollFeed();
+    saveFeed();
+  };
+  try {
+    const saved = sessionStorage.getItem(FEED_KEY);
+    if (saved) {
+      box.innerHTML = saved;
+      box.querySelectorAll('.turn[data-pending="1"]').forEach(t => { t.dataset.pending = "0"; t.querySelector(".a").textContent = "(interrupted by a reload)"; });
+      if (box.children.length) { box.classList.add("show"); requestAnimationFrame(scrollFeed); }
+    }
+  } catch {}
+
+  // ---------------------------------------------------------------- status
+  const statusEl = document.getElementById("status");
+  const MUTED = new URLSearchParams(location.search).get("mute") === "1";
+  const LABELS = { idle: "Ready", listening: "Listening", thinking: "Thinking", speaking: "Speaking", asleep: "Asleep", offline: "Offline" };
+  let mode = "idle";                          // idle | listening | thinking | speaking | asleep
+  let asleep = true;                          // starts asleep: only "hey/yo/ay Jarvis" wakes him
+  function setStatus(m, note) {
+    mode = m;
+    statusEl.dataset.mode = m;
+    statusEl.querySelector("b").textContent = LABELS[m];
+    const hint = note ?? (m === "listening" ? "your turn, I'll wait until you finish"
+      : m === "speaking" && micOn ? "say “stop” or “hey Jarvis” to interrupt"
+      : m === "asleep" ? (micMuted ? "mic muted, type, or click the mic to unmute" : micOn ? "say “hey Jarvis”" : "type, or allow the microphone to say “hey Jarvis”")
+      : m === "idle" && micMuted ? "mic muted, type, or click the mic to unmute" : "");
+    statusEl.querySelector(".note").textContent = [hint, MUTED ? "muted (?mute=1)" : ""].filter(Boolean).join(" · ");
+    const hintEl = document.getElementById("hint");
+    if (hintEl) hintEl.textContent = statusEl.querySelector(".note").textContent;
+  }
+  const restStatus = note => setStatus(asleep ? "asleep" : micOn ? "listening" : "idle", note);
+
+  // ---------------------------------------------------------------- speaking
+  const SPOKEN_SENTENCES = 3;
+  const synth = window.speechSynthesis;
+  let audioUnlocked = false, pendingSpeech = null, utterances = [];
+  let spokenWords = new Set(), spokenWordsTimer = null;      // what he is saying right now (echo filter)
+
+  function pickVoice() {
+    const voices = synth ? synth.getVoices() : [];
+    const male = /\b(male|daniel|george|ryan|thomas|arthur|oliver|james|harry|alfie|rishi|guy)\b/i;
+    const gb = v => /^en[-_]GB$/i.test(v.lang);
+    return voices.find(v => gb(v) && male.test(v.name))
+        || voices.find(v => gb(v))
+        || voices.find(v => /^en/i.test(v.lang) && male.test(v.name))
+        || voices.find(v => /^en/i.test(v.lang))
+        || null;
+  }
+  let voice = pickVoice();
+  if (synth) synth.addEventListener("voiceschanged", () => { voice = pickVoice(); });
+
+  // The ONLY function that produces sound. ?mute=1 is checked here so nothing can route around it.
+  function speak(text, limit = SPOKEN_SENTENCES) {
+    if (MUTED) return;
+    if (!synth || !text) return;
+    if (!audioUnlocked) { pendingSpeech = text; return; }      // never before the first click
+    stopSpeaking();
+    const clean = text.replace(/```[\s\S]*?(```|$)/g, " ").replace(/\*\*|__|`/g, "").replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "");
+    // Sentence by sentence (Chrome silently stalls on long single utterances), and never more
+    // than limit: the note itself is on screen, the voice only gives the gist. Brain changes are
+    // spoken in full, since a refusal must read out every model that really works.
+    const parts = clean.split(/(?<=[.!?])\s+/).map(t => t.trim()).filter(Boolean).slice(0, limit);
+    spokenWords = new Set(parts.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(w => w.length > 1));
+    clearTimeout(spokenWordsTimer);
+    const batch = parts.map((part, i) => {
+      const u = new SpeechSynthesisUtterance(part);
+      if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = "en-GB"; }
+      u.rate = 1.03;
+      u.onboundary = e => { if (e.name !== "sentence" && window.__avatarPulse) window.__avatarPulse(0.28 + Math.random() * 0.12); };
+      u.onstart = () => window.__avatarPulse && window.__avatarPulse(0.3);
+      if (i === parts.length - 1) u.onend = u.onerror = () => { if (utterances === batch) { utterances = []; afterSpeaking(); } };
+      return u;
+    });
+    utterances = batch;                                        // hold references so Chrome can't GC them mid-speech
+    setStatus("speaking");
+    synth.resume();
+    batch.forEach(u => synth.speak(u));
+  }
+  function stopSpeaking() {
+    utterances = [];
+    if (synth && (synth.speaking || synth.pending)) synth.cancel();   // freezes, aborts and flushes the whole queue
+  }
+
+  // Unlock audio on the first real user gesture and say the first line inside that gesture.
+  const UNLOCK_EVENTS = ["pointerdown", "pointerup", "keydown", "click", "touchend"];
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return; // not a trusted gesture yet
+    audioUnlocked = true;
+    UNLOCK_EVENTS.forEach(t => removeEventListener(t, unlockAudio, true));
+    if (!micOn && rec) setMic(true);                           // in case the page-load start was refused
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();   // the reactor's mic level needs a running context
+    const first = pendingSpeech;                                  // no greeting: silent until you say "hey Jarvis"
+    pendingSpeech = null;
+    if (first) speak(first);
+  }
+  UNLOCK_EVENTS.forEach(t => addEventListener(t, unlockAudio, true));
+
+  // Spoken lines from the server's persona. The boot greeting is deliberately not used: he stays
+  // silent (nothing shown, nothing said) until you wake him.
+  const LINES = { share_ended: "The screen share has ended, so I can't see it.",
+                  not_sharing: "I can't see your screen until you share it.",
+                  wake_ack: "Yes, sir?", sleep: "Going to sleep, sir.",
+                  goodbye: "Shutting down, sir. Goodbye." };   // replaced by /persona
+  fetch("/persona").then(r => r.json()).then(p => {
+    Object.assign(LINES, Object.fromEntries(Object.entries(p).filter(([k, v]) => k in LINES && v)));
+  }).catch(() => {});
+
+  // ---------------------------------------------------------------- listening
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const INTERRUPTS = new Set(["stop", "wait", "cancel", "hold on", "quiet", "pause", "shut up"]);
+  const firedInterrupts = new Set();
+  let rec = null, micOn = false, session = 0;
+  // Muted by the mic button: nothing turns the mic back on (page load, first click, back online) until
+  // you click it again. Kept for this window only, so a fresh launch always starts listening.
+  let micMuted = false;
+  try { micMuted = sessionStorage.getItem("jarvis.micMuted") === "1"; } catch (_) {}
+  let buffer = [], interimText = "", finishTimer = null;
+
+  const normalise = t => t.toLowerCase().replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim()
+                          .replace(/^please /, "").replace(/ please$/, "");
+  const isInterrupt = t => INTERRUPTS.has(normalise(t));
+  // "Scratch that" / "cancel that" / "never mind" at the END of what you've said throws the whole
+  // draft away before it's sent (misheard, or you misspoke), and he keeps listening for the retry.
+  // Judged on final results only, so it needs the small pause the recogniser takes to settle.
+  // Only phrases nobody ends a real request with ("...and delete it" is a real request).
+  const SCRAP_RE = /(?:^| )(?:scratch (?:that|this)|cancel that|never ?mind)(?: jarvis)?$/;
+  function scrapDraft(note) {
+    const woke = asleep && WAKE_RE.test(buffer.join(" "));   // "hey Jarvis, ... scratch that": stay awake for the retry
+    clearBuffer();
+    input.value = "";
+    if (woke) setAsleep(false);
+    touch();
+    restStatus(asleep ? undefined : note);           // asleep, nothing you said was shown, so nothing to report
+  }
+  const showDraft = () => { input.value = [...buffer, interimText].filter(Boolean).join(" "); };
+
+  function clearBuffer() {
+    clearTimeout(finishTimer); finishTimer = null;
+    buffer = []; interimText = "";
+    if (micOn) input.value = "";
+  }
+
+  // (Re)start the finish window. Only FINISH_MS of unbroken silence sends the combined sentence.
+  function armFinish() {
+    clearTimeout(finishTimer);
+    finishTimer = setTimeout(() => {
+      finishTimer = null;
+      if (interimText) return armFinish();   // still mid-phrase: keep waiting
+      const sentence = buffer.join(" ").replace(/\s+/g, " ").trim();
+      buffer = [];
+      if (sentence) handleSpoken(sentence);
+    }, FINISH_MS);
+  }
+
+  function interrupt(word) {
+    clearBuffer();
+    stopSpeaking();
+    if (inflight) { inflight.abort(); inflight = null; send.disabled = false; setAnswer(lastQuestion, "Stopped."); }
+    restStatus(`heard “${word}”`);
+  }
+
+  function afterSpeaking() {
+    // Discard anything the mic caught of our own voice (aborting drops the recogniser's
+    // pending results; onend restarts it clean), then hand the turn back. The words he said stay
+    // in the echo filter for 4 s more, for any tail the speakers (or a slow recogniser) still deliver.
+    clearBuffer();
+    if (micOn && rec) { try { rec.abort(); } catch (_) {} }
+    spokenWordsTimer = setTimeout(() => { spokenWords = new Set(); }, 4000);
+    touch();
+    restStatus();
+  }
+
+  // ---- wake phrases, sleep, and talking over him
+  // Asleep, only a sentence that STARTS with one of three wake phrases gets through: "hey jarvis",
+  // "yo jarvis", "ay jarvis" ("aye"/"ayy" are how recognisers spell "ay"). Nothing else wakes him:
+  // not "okay jarvis", not "jarvis" alone. Awake, follow-ups need no wake phrase until he sleeps.
+  const WAKE_RE = /^\s*(?:hey|yo|ay|aye|ayy)[\s,.!-]+jarvis\b[\s,.!?:;-]*/i;
+  const SLEEP_RE = /^\s*(?:(?:hey|yo|ay|aye|ayy)[\s,.!-]+)?(?:jarvis[\s,.!]*)?(?:please\s+)?(?:go\s+to\s+sleep|stand\s+down)(?:[\s,.!]+jarvis)?[\s.!]*$/i;
+  const SLEEP_MS = (Number(new URLSearchParams(location.search).get("sleep")) || 60) * 1000;   // ?sleep=N for testing
+  let lastActivity = Date.now();
+  const touch = () => { lastActivity = Date.now(); };
+  const words = t => normalise(t).split(" ").filter(w => w.length > 1);
+  // His own voice coming back through the mic: most of the words are ones he is saying right now.
+  // (Windows speaks through its own audio path, so the browser's echo cancellation can't remove it.)
+  // Compared on content words, so your "what is the time" isn't mistaken for his "the time is...".
+  const FILLER = new Set("the a an and or but of to in on at for is are was be it its that this you your my me we us he his i so do as with what how".split(" "));
+  function isEcho(text, share = 0.6) {
+    const all = words(text), w = all.filter(x => !FILLER.has(x));
+    const pool = w.length ? w : all;
+    if (!pool.length) return true;
+    return pool.filter(x => spokenWords.has(x)).length / pool.length >= share;
+  }
+  // While he speaks the mic hears him, and on a long read the recogniser garbles enough of his words
+  // that no word filter is safe. So only two things cut him off: a stop word on its own, or a
+  // sentence that starts with a wake phrase ("hey Jarvis, ..."), which his own voice never says.
+  const isBargeIn = text => WAKE_RE.test(text) && !(spokenWords.has("hey") && spokenWords.has("jarvis"));
+  function setAsleep(on) {
+    asleep = on;
+    const av = document.getElementById("avatar");
+    av.classList.toggle("asleep", on);
+    const cs = getComputedStyle(av);
+    if (window.__faceRecolor) window.__faceRecolor(cs.getPropertyValue("--av1").trim(), cs.getPropertyValue("--av2").trim());
+    if (!on) touch();
+    if (mode === "listening" || mode === "idle" || mode === "asleep") restStatus();
+  }
+  // Told to sleep: he says goodbye. Timed out (60 s of quiet): he just dims, without a word.
+  function goToSleep(silent = false) {
+    clearBuffer();
+    if (inflight) { inflight.abort(); inflight = null; send.disabled = false; }
+    setAsleep(true);
+    if (!silent) speak(LINES.sleep);
+    if (mode !== "speaking") restStatus();
+  }
+  function wakeAck() { input.value = ""; speak(LINES.wake_ack); }
+  // You started talking while he was speaking: stop at once (the whole queue), listen, and keep
+  // what you said as the start of your new sentence.
+  function bargeIn() {
+    stopSpeaking();
+    clearTimeout(spokenWordsTimer);
+    spokenWordsTimer = setTimeout(() => { spokenWords = new Set(); }, 1500);   // his last echo, then it's all you
+    clearTimeout(finishTimer); finishTimer = null;
+    setStatus(asleep ? "asleep" : "listening", "go ahead");
+    touch();
+  }
+  function handleSpoken(sentence) {
+    touch();
+    if (SLEEP_RE.test(sentence)) return goToSleep();
+    const m = sentence.match(WAKE_RE);
+    if (asleep && !m) { input.value = ""; return restStatus(); }   // no wake phrase: stay asleep, send nothing
+    const rest = m ? sentence.slice(m[0].length).trim() : sentence;
+    if (asleep) setAsleep(false);
+    if (!rest) return wakeAck();
+    ask(rest);
+  }
+  function handleTyped(text) {                                  // typing is always deliberate: it wakes him
+    touch();
+    if (SLEEP_RE.test(text)) { input.value = ""; return goToSleep(); }
+    const m = text.match(WAKE_RE);
+    const rest = m ? text.slice(m[0].length).trim() : text;
+    if (asleep) setAsleep(false);
+    if (!rest) return wakeAck();
+    ask(rest);
+  }
+  // Sixty seconds with no speech, typing or sound from you: he says so, dims, and waits for a wake phrase.
+  setInterval(() => {
+    if (!asleep && mode !== "thinking" && mode !== "speaking" && !inflight && Date.now() - lastActivity > SLEEP_MS) goToSleep(true);
+  }, 1000);
+
+  function setMic(on) {
+    if (on && (offline || micMuted)) return;
+    micOn = on;
+    clearBuffer();
+    if (on) {
+      firedInterrupts.clear();
+      window.__micLevel && window.__micLevel.start();
+      try { rec.start(); } catch (_) {}
+      if (mode === "idle" || mode === "asleep") restStatus();
+    } else {
+      window.__micLevel && window.__micLevel.stop();
+      try { rec.abort(); } catch (_) {}
+      if (mode === "listening" || mode === "asleep") restStatus();
+    }
+  }
+
+  if (!Recognition) {
+    console.warn("Voice input needs Chrome or Edge");
+  } else {
+    rec = new Recognition();
+    rec.lang = "en-GB";
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    rec.onstart = () => { session++; };
+    rec.onresult = e => {
+      if (!micOn) return;
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i], text = r[0].transcript.trim();
+        if (!text) continue;
+        // "Stop", "wait", "quiet"... on their own: halt and stay quiet (fires on the first interim hit
+        // while he's busy; otherwise only on a final result, so "wait times..." isn't cut short).
+        if (!asleep && isInterrupt(text) && (r.isFinal || mode === "speaking" || mode === "thinking")
+            && !(mode === "speaking" && spokenWords.has(normalise(text).split(" ")[0]))) {   // not his own word echoed
+          const key = session + ":" + i;
+          if (!firedInterrupts.has(key)) { firedInterrupts.add(key); interrupt(normalise(text)); }
+          continue;
+        }
+        if (mode === "speaking") {
+          if (!isBargeIn(text)) continue;                       // his own voice (however garbled), or a cough
+          bargeIn();                                             // "hey Jarvis, ...": he stops at once
+        } else if (mode === "thinking") {
+          continue;                                              // mid-request chatter
+        } else if (spokenWords.size && isEcho(text, 0.5) && !WAKE_RE.test(text)) {
+          continue;                                              // the tail of what he just said
+        }
+        touch();
+        if (r.isFinal) {
+          buffer.push(text);
+          if (SCRAP_RE.test(normalise(buffer.join(" ")))) { scrapDraft("scrapped, say it again"); interim = ""; continue; }
+        }
+        else interim += (interim ? " " : "") + text;
+      }
+      if (mode !== "listening" && mode !== "asleep" && mode !== "idle") return;
+      interimText = interim;
+      // Asleep, nothing you say is shown unless it starts with a wake phrase.
+      const draft = [...buffer, interimText].filter(Boolean).join(" ");
+      if (!asleep || WAKE_RE.test(draft) || SLEEP_RE.test(draft)) showDraft();
+      if (buffer.length || interimText) armFinish();   // any new speech restarts the window
+    };
+    rec.onend = () => {
+      if (interimText && (mode === "listening" || mode === "asleep")) { buffer.push(interimText); interimText = ""; armFinish(); }
+      if (micOn) setTimeout(() => { if (micOn) { try { rec.start(); } catch (_) {} } }, 120);
+    };
+    rec.onerror = e => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        setMic(false); restStatus("microphone blocked, allow it in the address bar (once)");
+      } else if (e.error === "network") {
+        restStatus("speech service unreachable");
+      }
+    };
+    // Always listening unless muted. The browser asks for the microphone once and remembers it.
+    setTimeout(() => setMic(true), 0);
+  }
+
+  const micBtn = document.getElementById("mic");
+  function showMuted() {
+    micBtn.setAttribute("aria-pressed", String(micMuted));
+    micBtn.title = micBtn.ariaLabel = micMuted ? "Unmute microphone" : "Mute microphone";
+  }
+  function setMuted(on) {
+    micMuted = on;
+    try { sessionStorage.setItem("jarvis.micMuted", on ? "1" : "0"); } catch (_) {}
+    showMuted();
+    if (on) { if (micOn) setMic(false); else restStatus(); }
+    else if (rec && !micOn) setMic(true);
+    else restStatus();
+  }
+  showMuted();
+  if (!Recognition) { micBtn.disabled = true; micBtn.title = "Voice input needs Chrome or Edge"; }
+  micBtn.onclick = () => setMuted(!micMuted);
+
+  // ---------------------------------------------------------------- brain chip
+  // Shows the model that really answered: set from /model, then from every answer's own report.
+  const brainEl = document.getElementById("brain");
+  function setBrain(m) {
+    if (!m) return;
+    brainEl.querySelector("b").textContent = m.name;
+    brainEl.querySelector("span").textContent = m.default ? "· default" : "";
+    brainEl.classList.toggle("custom", !m.default);
+    brainEl.dataset.id = m.id || "";
+  }
+  fetch("/model").then(r => r.json()).then(d => setBrain(d.model)).catch(() => {});
+
+  // ---------------------------------------------------------------- the brain menu
+  // Lists the models this subscription really runs (tested live the first time it opens, as a spoken
+  // switch would be), and switches through the same path as "switch to Sonnet 5.5".
+  const menu = document.getElementById("modelmenu");
+  let menuPoll = null;
+  function closeMenu() { menu.hidden = true; brainEl.setAttribute("aria-expanded", "false"); clearTimeout(menuPoll); }
+  async function renderMenu() {
+    let d;
+    try { d = await (await fetch("/models")).json(); } catch { menu.textContent = "Couldn't reach the server."; return; }
+    menu.replaceChildren();
+    const row = (label, note, title, disabled, isCurrent, onPick) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.disabled = disabled; b.title = title || ""; b.setAttribute("role", "option");
+      if (isCurrent) b.classList.add("current");
+      const span = document.createElement("span"); span.textContent = label;
+      const small = document.createElement("small"); small.textContent = note;
+      b.append(span, small);
+      b.onclick = () => { closeMenu(); onPick(); };
+      menu.appendChild(b);
+    };
+    const cur = d.current || {};
+    row(`Default${d.default && d.default.name ? " (" + d.default.name + ")" : ""}`, cur.default ? "current" : "",
+        "Claude Code's own default model", false, !!cur.default, () => changeModel("go back to your normal brain"));
+    for (const m of d.models || []) {
+      const isCur = !cur.default && cur.id === m.id;
+      row(m.name, m.status === "ok" ? (isCur ? "current" : "") : m.status === "refused" ? "unavailable" : "checking…",
+          m.reason || "", m.status === "refused", isCur, () => changeModel(`switch to ${m.name}`));
+    }
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = d.checked ? "Only models your plan really runs can be picked." : "Checking which models your plan runs…";
+    menu.appendChild(hint);
+    if (!d.checked && !menu.hidden) menuPoll = setTimeout(renderMenu, 2000);
+  }
+  brainEl.onclick = e => {
+    e.stopPropagation();
+    if (!menu.hidden) return closeMenu();
+    menu.hidden = false; brainEl.setAttribute("aria-expanded", "true");
+    menu.style.maxHeight = Math.max(160, innerHeight - menu.getBoundingClientRect().top - 16) + "px";
+    menu.textContent = "Loading…";
+    renderMenu();
+  };
+  document.addEventListener("click", e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { closeMenu(); closeSettings(); } });
+
+  // ---------------------------------------------------------------- settings drawer + the two themes
+  const settings = document.getElementById("settings");
+  function closeSettings() { settings.classList.remove("open"); }
+  document.getElementById("gear").onclick = e => { e.stopPropagation(); settings.classList.toggle("open"); };
+  document.addEventListener("click", e => { if (settings.classList.contains("open") && !settings.contains(e.target)) closeSettings(); });
+  const store = { get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+                  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+  const hexToRgb = h => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+  const mix = (a, b, t) => "#" + hexToRgb(a).map((x, i) => Math.round(x + (hexToRgb(b)[i] - x) * t).toString(16).padStart(2, "0")).join("");
+
+  // Control 1: the interface. Background, panels/sidebars, text, accent. Never touches the avatar.
+  const UI_PRESETS = {
+    "Midnight": { bg: "#000000", panel: "#0c0e16", text: "#e8eaf0", accent: "#7cc4ff" },
+    "Graphite": { bg: "#121316", panel: "#1d1f25", text: "#eceef2", accent: "#a5b4fc" },
+    "Deep Ocean": { bg: "#020c1b", panel: "#0a1930", text: "#ccd6f6", accent: "#64ffda" },
+    "Royal": { bg: "#0b0518", panel: "#170d2e", text: "#ece6ff", accent: "#c084fc" },
+    "Ember": { bg: "#100806", panel: "#1f120d", text: "#f5e6dc", accent: "#ff9f5a" },
+  };
+  const UI_DEFAULT = "Midnight";
+  function applyUI(t) {
+    const root = document.documentElement.style;
+    const [r, g, b] = hexToRgb(t.panel);
+    root.setProperty("--bg", t.bg);
+    root.setProperty("--panel", `rgba(${r}, ${g}, ${b}, 0.86)`);
+    root.setProperty("--text", t.text);
+    root.setProperty("--muted", mix(t.text, t.bg, 0.38));
+    root.setProperty("--accent", t.accent);
+    root.setProperty("--border", mix(t.panel, t.text, 0.14));
+    try { Graph.backgroundColor(t.bg); } catch {}
+    for (const [id, k] of [["uiBg", "bg"], ["uiPanel", "panel"], ["uiText", "text"], ["uiAccent", "accent"]]) document.getElementById(id).value = t[k];
+  }
+  // Control 2: the avatar matrix. Only --av1 / --av2 / --av-glow, used only by the reactor and the face.
+  const AV_PRESETS = {
+    "Purple & Blue": { av1: "#7b2ff7", av2: "#00c6ff", glow: 1 },
+    "Arc Gold": { av1: "#ff3d00", av2: "#ffd54f", glow: 1.1 },
+    "Emerald": { av1: "#00b37a", av2: "#7cffcb", glow: 1 },
+    "Crimson": { av1: "#8b0026", av2: "#ff4d6d", glow: 1.1 },
+    "Ice": { av1: "#3a7bd5", av2: "#e0f7ff", glow: 0.9 },
+  };
+  const AV_DEFAULT = "Purple & Blue";
+  function applyAvatar(t) {
+    const root = document.documentElement.style;
+    root.setProperty("--av1", t.av1); root.setProperty("--av2", t.av2); root.setProperty("--av-glow", String(t.glow));
+    document.getElementById("av1").value = t.av1; document.getElementById("av2").value = t.av2;
+    document.getElementById("avGlow").value = t.glow;
+    if (window.__faceRecolor) window.__faceRecolor(t.av1, t.av2);
+  }
+  function wireTheme(presetId, presets, defName, key, apply, fields, resetId) {
+    const sel = document.getElementById(presetId);
+    for (const name of [...Object.keys(presets), "Custom"]) sel.add(new Option(name, name));
+    let theme = store.get(key) || { preset: defName, ...presets[defName] };
+    sel.value = theme.preset in presets ? theme.preset : "Custom";
+    apply(theme);
+    sel.onchange = () => { if (sel.value in presets) { theme = { preset: sel.value, ...presets[sel.value] }; apply(theme); store.set(key, theme); } };
+    for (const [id, k, num] of fields) {
+      document.getElementById(id).oninput = e => {
+        theme = { ...theme, preset: "Custom", [k]: num ? Number(e.target.value) : e.target.value };
+        sel.value = "Custom"; apply(theme); store.set(key, theme);
+      };
+    }
+    document.getElementById(resetId).onclick = () => { theme = { preset: defName, ...presets[defName] }; sel.value = defName; apply(theme); store.set(key, theme); };
+  }
+  wireTheme("uiPreset", UI_PRESETS, UI_DEFAULT, "jarvis.theme.ui", applyUI,
+            [["uiBg", "bg"], ["uiPanel", "panel"], ["uiText", "text"], ["uiAccent", "accent"]], "uiReset");
+
+  // ---------------------------------------------------------------- the avatar
+  // Mode A is pure CSS (the rings read --level). Mode B is a particle face drawn with the Three.js
+  // already on the page. --level is the live voice: the microphone's real volume (Web Audio) while
+  // you talk; while Jarvis speaks, each spoken word (the speech engine's word-boundary events),
+  // because browsers don't expose the synthesised voice's audio to Web Audio.
+  const avatar = document.getElementById("avatar");
+  let level = 0, target = 0, micLevel = 0, micAnalyser = null, micStream = null, micBuf = null;
+  const avPulse = v => { target = Math.max(target, v); };
+  window.__avatarPulse = avPulse;
+  avatar.dataset.mode = store.get("jarvis.avatar.mode") === "face" ? "face" : "reactor";
+  document.getElementById("avatarMode").onclick = () => {
+    avatar.dataset.mode = avatar.dataset.mode === "face" ? "reactor" : "face";
+    store.set("jarvis.avatar.mode", avatar.dataset.mode);
+  };
+  async function startMicLevel() {
+    if (micAnalyser || !navigator.mediaDevices?.getUserMedia) return;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      micAnalyser = audioCtx.createAnalyser(); micAnalyser.fftSize = 512;
+      audioCtx.createMediaStreamSource(micStream).connect(micAnalyser);
+      micBuf = new Uint8Array(micAnalyser.fftSize);
+    } catch { micAnalyser = null; }
+  }
+  function stopMicLevel() {
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    micStream = micAnalyser = null; micLevel = 0;
+  }
+  window.__micLevel = { start: startMicLevel, stop: stopMicLevel };
+
+  // The particle face: a head-shaped cloud (eyes, brow, nose, lips), coloured along the avatar gradient.
+  const face = (() => {
+    const canvas = document.getElementById("face");
+    let renderer;
+    try { renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true }); } catch { return null; }
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
+    camera.position.set(0, 0, 4.4);
+    const N = 3400, base = new Float32Array(N * 3), pos = new Float32Array(N * 3), col = new Float32Array(N * 3), role = new Uint8Array(N);
+    const g = (x, y, cx, cy, sx, sy) => Math.exp(-(((x - cx) / sx) ** 2 + ((y - cy) / sy) ** 2));
+    let i = 0;
+    const put = (x, y, z, r) => { base.set([x, y, z], i * 3); role[i] = r; i++; };
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let k = 0; i < N - 520; k++) {                     // the head: a Fibonacci sphere, front half, shaped
+      const y = 1 - (k / 4200) * 2, rad = Math.sqrt(1 - y * y), th = golden * k;
+      let x = Math.cos(th) * rad, z = Math.sin(th) * rad;
+      if (z < -0.15 || k > 4200) { if (k > 4200) break; continue; }
+      x *= 0.74 * (1 - 0.18 * Math.max(0, -y));             // narrower towards the chin
+      let Y = y * 1.0;
+      z = z * 0.82 + 0.16 * g(x, Y, 0, -0.08, 0.1, 0.24)      // nose
+            - 0.09 * (g(x, Y, -0.27, 0.17, 0.13, 0.08) + g(x, Y, 0.27, 0.17, 0.13, 0.08))   // eye sockets
+            + 0.05 * g(x, Y, 0, 0.32, 0.45, 0.06)             // brow
+            + 0.04 * (g(x, Y, -0.38, -0.12, 0.14, 0.14) + g(x, Y, 0.38, -0.12, 0.14, 0.14)); // cheeks
+      put(x, Y, z, Y < -0.43 ? 2 : 0);                        // 2 = jaw: drops as he speaks
+    }
+    for (const sx of [-0.27, 0.27]) for (let a = 0; a < 70; a++) {   // eyes: bright rings
+      const t = a / 70 * Math.PI * 2; put(sx + Math.cos(t) * 0.1, 0.17 + Math.sin(t) * 0.045, 0.72, 1);
+    }
+    for (let a = 0; a < 120 && i < N; a++) {                 // lips: upper and lower
+      const t = a / 120 * Math.PI * 2, x = Math.cos(t) * 0.2, y = -0.42 + Math.sin(t) * 0.035;
+      put(x, y, 0.74 - Math.abs(x) * 0.3, Math.sin(t) < 0 ? 3 : 1);  // 3 = lower lip moves with the jaw
+    }
+    const count = i;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    geo.setDrawRange(0, count);
+    const mat = new THREE.PointsMaterial({ size: 0.028, vertexColors: true, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false });
+    const cloud = new THREE.Points(geo, mat);
+    scene.add(cloud);
+    function recolor(c1, c2) {
+      const a = new THREE.Color(c1), b = new THREE.Color(c2), c = new THREE.Color();
+      for (let j = 0; j < count; j++) {
+        const t = Math.min(1, Math.max(0, (base[j * 3 + 1] + 1) / 2 * 0.7 + (base[j * 3] + 0.8) / 1.6 * 0.3));
+        c.copy(a).lerp(b, t);
+        if (role[j] === 1 || role[j] === 3) c.lerp(new THREE.Color("#ffffff"), 0.45);
+        col.set([c.r, c.g, c.b], j * 3);
+      }
+      geo.attributes.color.needsUpdate = true;
+    }
+    window.__faceRecolor = recolor;
+    let size = 0;
+    function frame(t, lv) {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w) return;
+      if (w !== size) { size = w; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+      const open = lv * 0.13, s = 1 + lv * 0.025;
+      for (let j = 0; j < count; j++) {
+        const x = base[j * 3], y = base[j * 3 + 1], z = base[j * 3 + 2], r = role[j];
+        const n = Math.sin(t * 2 + j * 1.7) * 0.004 * (1 + lv * 2.5);  // a gentle shimmer, a touch stronger with the voice
+        pos[j * 3] = x * s + n;
+        pos[j * 3 + 1] = (r === 2 || r === 3 ? y - open * (r === 3 ? 1 : Math.min(1, (-0.43 - y) * 3 + 0.6)) : y) * s + n;
+        pos[j * 3 + 2] = z * s + n;
+      }
+      geo.attributes.position.needsUpdate = true;
+      cloud.rotation.y = Math.sin(t * 0.35) * 0.32;
+      cloud.rotation.x = Math.sin(t * 0.23) * 0.06 - 0.04;
+      mat.size = 0.026 + lv * 0.014;
+      renderer.render(scene, camera);
+    }
+    return { frame, recolor };
+  })();
+  wireTheme("avPreset", AV_PRESETS, AV_DEFAULT, "jarvis.theme.avatar", applyAvatar,
+            [["av1", "av1"], ["av2", "av2"], ["avGlow", "glow", true]], "avReset");
+
+  (function tick(now) {
+    const t = now / 1000;
+    if (micAnalyser && micBuf) {
+      micAnalyser.getByteTimeDomainData(micBuf);
+      let sum = 0; for (const v of micBuf) sum += ((v - 128) / 128) ** 2;
+      micLevel = Math.min(1, Math.max(0, Math.sqrt(sum / micBuf.length) * 7 - 0.06));      // normal speech lands around .3-.7; a small noise gate
+      avPulse(micLevel);
+      if (micLevel > 0.15 && mode !== "speaking") touch();
+    }
+    if (mode === "speaking") avPulse(0.16 + 0.05 * Math.sin(t * 2.2));      // a slow, low glow while he talks
+    else if (mode === "thinking") avPulse(0.08 + 0.05 * Math.sin(t * 1.6));
+    level += (target - level) * (target > level ? 0.16 : 0.05);              // follows the voice, settles gently
+    target *= 0.9;
+    avatar.style.setProperty("--level", level.toFixed(3));
+    if (face && avatar.dataset.mode === "face") face.frame(t, level);
+    requestAnimationFrame(tick);
+  })(performance.now());
+
+  // ---------------------------------------------------------------- asking (typed and spoken)
+  let inflight = null, lastQuestion = "";
+  const REMEMBER = /^\s*(please\s+)?remember\s+that\b/i;
+  // "try on Opus 5", "switch to Fable 5.1", "go back to your normal brain". The server decides what
+  // was asked for; this only spots that it IS a brain change and not a question about the notes.
+  const MODEL_Q = /^\s*(?:(?:hey|yo|ay|aye|ayy)?\s*jarvis[,.]?\s*)?(?:please\s+)?(?:try on|try out|switch (?:over |back )?to|switch (?:your |the )?(?:brain|model|mind|head)(?: array)? (?:over |back )?to|swap (?:your \w+ )?to|change (?:your \w+ )?to|go back to|use)\b.*\b(?:opus|sonnet|haiku|fable|claude|gpt|chat ?gpt|gemini|llama|grok|brain|model|mind|self)\b/i;
+  // ---------------------------------------------------------------- Google (calendar + mail)
+  // Mail and calendar questions go to /tool_chat, where Claude uses the Google tools. A short
+  // follow-up ("yes, move it") right after one also goes there, so a confirmation lands in a fresh turn.
+  const googleBtn = document.getElementById("google");
+  let google = { connected: false }, lastToolTurn = 0;
+  // Local requests go to the same tool loop: open an app or page, manage workspace files.
+  const LOCAL_Q = /\b(open|launch|start up|fire up|pull up|bring up)\b|\b(folders?|files?|workspace|university|uni|homework|assignments?|coursework|lecture notes|move (?:my|the|this|that|it)|rename|copy (?:my|the|this|that|it))\b/i;
+  const GOOGLE_Q = /\b(e-?mails?|mail|inbox|gmail|unread|drafts?|repl(y|ies)|calendar|agenda|diary|schedule|drive|google\s+docs?|docs?|documents?|spreadsheets?|sheets?|slides?|decks?|presentations?|meetings?|appointments?|events?|reschedule|move (it|that|the|my)|book|what'?s on|am i (free|busy)|free (time|slot)|busy)\b/i;
+  // Internship applications (internship_apply/tools.py) use the same tool loop. Keep in step with server.py's ROUTE_INTERN_RE.
+  const INTERN_Q = /\b(internships?|intern|co-?ops?|placements?|job (?:listings?|applications?|hunt)|applications?|apply|applied|cover letters?|resumes?|cv|recruiters?|interviews?|(?:the |my )?review queue|waiting for (?:my |your )?review|submitted by me|job offers?)\b/i;
+  const FOLLOW_UP = /^\s*(yes|yeah|yep|yup|ok(ay)?|sure|please do|do it|go ahead|confirm(ed)?|that one|the (first|second|third|last) one|move it|draft it|book it|add it|no,?\s)/i;
+  function setGoogle(st) {
+    google = st || { connected: false };
+    googleBtn.classList.toggle("on", !!google.connected);
+    const needs = (google.missing_scopes || []).length;
+    googleBtn.innerHTML = !google.connected ? "Connect Google" : needs ? "Reconnect Google" : `Google: <b>${esc(google.email || "connected")}</b>`;
+    document.getElementById("googleNote").textContent = !google.connected
+      ? (google.configured === false ? "Put google_client_id and google_client_secret in config.json first." : "Not connected.")
+      : (google.missing_scopes || []).length ? "Connected, but some permissions are missing: press Reconnect."
+      : "Connected: Gmail, Calendar, Drive, Docs, Sheets and Slides. Click to disconnect.";
+    googleBtn.title = google.connected ? "Connected. Click to disconnect (deletes the saved sign-in)."
+      : google.configured === false ? "First put google_client_id and google_client_secret in config.json"
+      : "Let me read your calendar and mail, and save drafts (never send)";
+  }
+  googleBtn.onclick = async () => {
+    if (!google.connected || (google.missing_scopes || []).length) { location.href = "/oauth/start"; return; }
+    if (!confirm("Disconnect Google? The saved sign-in will be deleted.")) return;
+    const d = await (await fetch("/google/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+    setGoogle({ connected: false, configured: true });
+    setAnswer("Disconnect Google", esc(d.say || "Disconnected.")); speak(d.say);
+  };
+  fetch("/google/status").then(r => r.json()).then(st => {
+    setGoogle(st);
+    const back = new URLSearchParams(location.search);
+    if (back.has("google")) {
+      history.replaceState(null, "", "/");
+      const ok = back.get("google") === "connected";
+      const line = ok ? st.say : "Connecting Google didn't work: " + (back.get("reason") || "unknown reason");
+      setAnswer("Connect Google", esc(line), "", !ok);
+      speak(line);
+    }
+  }).catch(() => {});
+
+  async function toolChat(q) {
+    stopSpeaking(); clearBuffer();
+    if (inflight) inflight.abort();
+    const ctrl = inflight = new AbortController();
+    input.value = ""; send.disabled = true;
+    setStatus("thinking", "checking your Google account");
+    setAnswer(q, '<span class="dots">Looking</span>');
+    if (!google.connected) {
+      const st = await fetch("/google/status").then(r => r.json()).catch(() => ({}));
+      setGoogle(st);
+      if (!st.connected) {
+        inflight = null; send.disabled = false; restStatus();
+        setAnswer(q, esc(st.say || "I'm not connected to Google yet."), "", true);
+        return speak(st.say || "I'm not connected to Google yet.");
+      }
+    }
+    try {
+      const res = await fetch("/tool_chat", { method: "POST", signal: ctrl.signal,
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.say || data.error || res.statusText);
+      if (ctrl !== inflight) return;
+      lastToolTurn = Date.now();
+      setBrain(data.model);
+      // Receipts are the only proof shown: each links to the real draft or event.
+      const receipts = (data.receipts || []).map(r => {
+        const label = { gmail_draft: "Draft saved", gcal_add: "Event added", gcal_move: "Event moved", docs_create: "Doc",
+                        docs_append: "Doc updated", sheets_create: "Sheet", sheets_append: "Sheet updated", slides_create: "Slides",
+                        open_app: "Opened", open_url: "Opened", open_path: "Opened", make_folder: "Folder made",
+                        move_path: "Moved", copy_path: "Copied", rename_path: "Renamed" }[r.tool] || r.tool;
+        if (String(r.tool).startsWith("internships_"))          // listing ids are never shown or spoken
+          return esc({ internships_prepare: "Materials ready", internships_fill: "Form filled for your review",
+                       internships_mark: "Status updated" }[r.tool] || "Internships");
+        return safeUrl(r.link) ? link(r.link, label, "receipt") : `${esc(label)} (${esc(r.id)})`;
+      });
+      const used = [...new Set(data.tools || [])];
+      const notes = [receipts.join(" "), used.length ? `Used: ${used.join(", ")}` : "",
+        (data.refused || []).length ? "Refused this turn: " + data.refused.join(", ") : ""].filter(Boolean).join(" · ");
+      setAnswer(q, esc(data.answer), notes, (data.unbacked_claims || []).length > 0);
+      inflight = null;
+      speak(data.answer);
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      setAnswer(q, esc("I couldn't check your Google account: " + err.message), "", true);
+      inflight = null;
+      speak("Sorry, I couldn't check your Google account.");
+    } finally {
+      if (!inflight) send.disabled = false;
+      if (mode === "thinking" && !inflight) restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+
+  // ---------------------------------------------------------------- desk cards and reminders
+  // The open desk polls /desk: that tells the server the desk is open (so reminders show here
+  // instead of going to your phone) and collects new cards. Call cards are announced by the call watcher.
+  const filterEl = document.getElementById("filter");
+  const REMIND_Q = /^\s*(?:(?:hey\s+)?jarvis[,.]?\s*)?(?:please\s+|can you\s+|could you\s+)?(?:remind me|set (?:a |an )?reminder)\b|\b(?:what|which|list|show|any|my)\b.*\breminders?\b|^\s*reminders?\s*\??\s*$|\b(?:cancel|delete|remove|clear|drop)\b.*\breminder\b/i;
+  let lastCard = -1, filterState = null;
+  var audioCtx = null;                         // shared: the chime and the avatar's mic level
+  function setFilter(st) { if (st) filterState = st; filterEl.hidden = !(filterState && filterState.armed); }
+  async function deskPoll() {
+    try {
+      const d = await (await fetch(`/desk?after=${lastCard}`)).json();
+      setFilter(d.standing);
+      lastReminders = d.reminders || [];
+      // On first load, cards missed while the page was closed arrive too (the server catches them up).
+      for (const c of d.cards || []) {
+        const receipts = ((c.ref && c.ref.receipts) || []).map(r => safeUrl(r.link)
+          ? link(r.link, { event: "Event", draft: "Draft", file: "File", docs_create: "Doc", sheets_create: "Sheet",
+                           slides_create: "Slides", docs_append: "Doc", sheets_append: "Sheet" }[r.kind] || r.kind, "receipt")
+          : `${esc({ file: "Saved", reminder: "Reminder set" }[r.kind] || r.kind)}: ${esc(r.title || r.id)}`).join(" ");
+        if (["outcome", "reply", "briefing"].includes(c.kind)) { if (mode === "thinking") restStatus(); }
+        const built = c.kind === "briefing" && c.ref && c.ref.built_from
+          ? `<details><summary>Built from</summary><pre>${esc(c.ref.built_from)}</pre></details>` : "";
+        setAnswer(c.title, esc(c.text) + built, receipts || (c.priority === "high" ? "Urgent" : ""), false);
+        if (c.quiet) continue;                         // standing order: shown, not announced
+        if (c.kind === "reminder" || c.kind === "briefing") { flashDesk(c.kind === "reminder" ? "⏰ Reminder" : "Briefing"); chime(); }
+        speak(c.kind === "reminder" ? `Reminder: ${c.text}` : c.text, c.kind === "briefing" ? Infinity : undefined);
+      }
+      lastCard = d.latest;
+      if (offline) setOffline(false);
+    } catch { if (++pollFails >= 2) setOffline(true); return; }
+    pollFails = 0;
+  }
+  // The server stopped (the power button, or it shut itself down after the window was closed).
+  let offline = false, pollFails = 0;
+  function setOffline(on) {
+    offline = on;
+    document.body.classList.toggle("offline", on);
+    if (on) { stopSpeaking(); setStatus("offline", "start J.A.R.V.I.S from the desktop shortcut"); }
+    else { if (!micOn && rec) setMic(true); restStatus(); }
+  }
+  document.getElementById("power").onclick = async () => {
+    stopSpeaking(); clearBuffer();
+    if (micOn) setMic(false);
+    let say = LINES.goodbye;
+    try { say = (await (await fetch("/shutdown", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).say || say; } catch {}
+    setAnswer("Shut down", esc(say));
+    speak(say, Infinity);
+  };
+  // A reminder or briefing flashes the panel, rings a chime and blinks the tab title.
+  function chime() {
+    if (MUTED) return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      [[880, 0], [1320, 0.18], [880, 0.36]].forEach(([f, t]) => {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain(), at = audioCtx.currentTime + t;
+        o.frequency.value = f; o.type = "sine";
+        g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.25, at + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+        o.connect(g).connect(audioCtx.destination); o.start(at); o.stop(at + 0.18);
+      });
+      window.__chimes = (window.__chimes || 0) + 1;
+    } catch {}
+  }
+  const baseTitle = document.title;
+  function flashDesk(label) {
+    const el = current || box; el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+    let n = 0; const t = setInterval(() => { document.title = n++ % 2 ? baseTitle : label; if (n > 20) { clearInterval(t); document.title = baseTitle; } }, 800);
+  }
+  // The HUD: a clock above the reactor, and a systems panel under the brain badge.
+  let lastReminders = [];
+  function hudTick() {
+    const now = new Date();
+    document.getElementById("clock").textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    document.getElementById("date").textContent = now.toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
+    const mic = document.getElementById("sysMic");
+    mic.textContent = micOn ? (asleep ? "Listening for you" : "Listening") : "Off"; mic.classList.toggle("on", micOn);
+    const g = document.getElementById("sysGoogle");
+    g.textContent = google.connected ? "Connected" : "Off"; g.classList.toggle("on", !!google.connected);
+    document.getElementById("sysNotes").textContent = `${GRAPH.nodes.length} notes`;
+    document.getElementById("sysRem").textContent = lastReminders.length ? `${lastReminders.length} pending` : "None";
+    const next = lastReminders[0];
+    document.getElementById("sysNext").textContent = next
+      ? `${new Date(next.due * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${next.task}` : "Nothing scheduled";
+  }
+  setInterval(hudTick, 1000);
+  deskPoll(); setInterval(deskPoll, 2000);
+  let fastTimer = null;
+  function fastPoll() {                               // while an instruction is being worked on: poll every second
+    clearInterval(fastTimer);
+    const until = Date.now() + 180000, start = lastCard;
+    fastTimer = setInterval(() => { if (Date.now() > until || lastCard > start) clearInterval(fastTimer); else deskPoll(); }, 1000);
+  }
+
+  async function deskAction(text, url, body, busy) {
+    stopSpeaking(); clearBuffer();
+    input.value = ""; send.disabled = true;
+    setStatus("thinking", busy);
+    setAnswer(text, '<span class="dots">One moment</span>');
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!data.say) throw new Error(data.error || `server replied ${res.status}`);
+      return { ok: res.ok && data.ok !== false, data };
+    } catch (err) {
+      return { ok: false, data: { say: "That didn't work: " + err.message } };
+    } finally {
+      send.disabled = false;
+      if (mode === "thinking") restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+  async function remind(text) {
+    const { ok, data } = await deskAction(text, "/remind", { text }, "noting the reminder");
+    setAnswer(text, esc(data.say), "", !ok); speak(data.say, Infinity);
+  }
+
+  async function ask(q) {
+    if (pendingFiles.length) return attach(q);
+    let routed = null;
+    try {
+      routed = await (await fetch("/route", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: q }) })).json();
+    } catch {}
+    if (routed && routed.route === "ignore") { input.value = ""; restStatus("nothing to do there"); return; }
+    if (routed && routed.route === "briefing") {     // composed in the background; arrives as a card
+      stopSpeaking(); clearBuffer(); input.value = "";
+      setStatus("thinking", "putting your briefing together");
+      setAnswer(q, '<span class="dots">Composing your briefing</span>');
+      fastPoll();
+      return;
+    }
+    if (routed && routed.route === "instruction") {   // done after the chat; the outcome arrives as one card
+      stopSpeaking(); clearBuffer(); input.value = "";
+      setStatus("thinking", "working on it");
+      setAnswer(q, '<span class="dots">Working on it</span>');
+      fastPoll();
+      return;
+    }
+    if (routed && routed.say) {                        // a standing order (or "I'm back"): one line, no card
+      stopSpeaking(); clearBuffer(); input.value = "";
+      setFilter(routed.standing);
+      setAnswer(q, esc(routed.say), routed.route === "standing" ? "Urgent filter armed: only what can't wait reaches your phone" : "",
+                routed.ok === false);
+      speak(routed.say, routed.route === "standing" ? undefined : Infinity);
+      return;
+    }
+    if (REMEMBER.test(q)) return remember(q);
+    if (REMIND_Q.test(q)) return remind(q);
+    if (MODEL_Q.test(q)) return changeModel(q);
+    if (shareLive() && SCREEN_Q.test(q)) return see(q);
+    if (GOOGLE_Q.test(q) || LOCAL_Q.test(q) || INTERN_Q.test(q) || (FOLLOW_UP.test(q) && Date.now() - lastToolTurn < 180000)) return toolChat(q);
+    if (shareLive()) return see(q);                    // while sharing, every other question looks at the screen
+    if (SCREEN_Q.test(q)) return cannotSee(q);         // a screen question with no live share: say so
+    stopSpeaking();
+    if (inflight) inflight.abort();
+    const ctrl = inflight = new AbortController();
+    lastQuestion = q;
+    clearBuffer();
+    input.value = ""; send.disabled = true;
+    setStatus("thinking", "");
+    setAnswer(q, '<span class="dots">Thinking</span>');
+    try {
+      const res = await fetch("/chat", { method: "POST", signal: ctrl.signal,
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (ctrl !== inflight) return;
+      setBrain(data.model);
+      const ids = (data.nodes || []).filter(i => GRAPH.nodes[i]);
+      const sources = ids.length ? "Sources: " + ids.map(i => `<a data-id="${Number(i)}">${esc(GRAPH.nodes[i].label)}</a>`).join("") : "";
+      setAnswer(q, esc(data.answer).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"), sources);
+      box.dataset.sources = showSources(data.intent, ids);   // camera/panel first, so it's on screen while spoken
+      inflight = null;
+      speak(data.answer);
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      setAnswer(q, esc("Something went wrong: " + err.message), "", true);
+      inflight = null;
+      speak("Sorry, something went wrong.");
+    } finally {
+      if (!inflight) send.disabled = false;
+      if (mode === "thinking" && !inflight) restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+
+  // A brain change. The server tries the model live first; a refusal is shown and spoken in full.
+  async function changeModel(text) {
+    stopSpeaking(); clearBuffer();
+    if (inflight) { inflight.abort(); inflight = null; }
+    input.value = ""; send.disabled = true;
+    setStatus("thinking", "trying it on");
+    setAnswer(text, '<span class="dots">Trying it on</span>');
+    brainEl.classList.add("changing");
+    let data = {};
+    try {
+      const res = await fetch("/model", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.say) throw new Error(data.error || `server replied ${res.status}`);
+      setBrain(data.model);
+      setAnswer(text, esc(data.say), data.ok ? `Brain: ${esc(data.model.name)}${data.model.id ? ` (${esc(data.model.id)})` : ""}` : "", !data.ok);
+      speak(data.say, Infinity);
+    } catch (err) {
+      setBrain(data.model);
+      setAnswer(text, esc("I couldn't change brains: " + err.message), "", true);
+      speak("Sorry, I couldn't change brains.");
+    } finally {
+      brainEl.classList.remove("changing");
+      send.disabled = false;
+      if (mode === "thinking") restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+
+  // ---------------------------------------------------------------- the phone
+  // "remember that ..." writes a real note. Every failure is shown AND spoken, never swallowed.
+  async function remember(text) {
+    stopSpeaking(); clearBuffer();
+    input.value = ""; send.disabled = true;
+    setStatus("thinking", "filing it");
+    setAnswer(text, '<span class="dots">Filing</span>');
+    let data = {};
+    try {
+      const res = await fetch("/remember", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.node) throw new Error(data.error || `server replied ${res.status}`);
+      addNode(data.node, data.links || [], data.anchor);
+      setAnswer(text, esc(data.say), `Saved: <a data-id="${Number(data.node.id)}">${esc(data.node.label)}</a>`);
+      speak(data.say);
+    } catch (err) {
+      const say = data.say || "I'm afraid that didn't make it into the notes, sir. The server could not be reached.";
+      setAnswer(text, esc(say + (data.say ? "" : ` (${err.message})`)), "", true);
+      speak(say);
+    } finally {
+      send.disabled = false;
+      if (mode === "thinking") restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+
+  // ---------------------------------------------------------------- sight
+  // One live getDisplayMedia stream is held while sharing. A frame is grabbed only at the moment a
+  // question is asked, sent once, and dropped. Nothing is cached, and screen answers never enter the
+  // chat history, so no answer can come from an earlier frame.
+  const screenBtn = document.getElementById("screen");
+  const shareVideo = Object.assign(document.createElement("video"), { muted: true, playsInline: true });
+  const MAX_EDGE = 1568;                               // Claude downsizes anything larger
+  const SCREEN_Q = /\b(screen|what do you (think|make) of (this|that|it)|look(ing)? at (this|that|it|my)|what am i looking at|can you see|do you see|what('?s| is) (this|that|on here)\s*[?.!]*$)/i;
+  let share = null, shareState = "never";             // never | live | ended
+  let lastFrameUrl = null;
+
+  const shareLive = () => !!share && share.getVideoTracks().some(t => t.readyState === "live");
+  function setShare(stream) {
+    share = stream;
+    shareState = stream ? "live" : shareState === "never" ? "never" : "ended";
+    document.body.classList.toggle("sharing", !!stream);
+    screenBtn.classList.toggle("on", !!stream);
+    screenBtn.setAttribute("aria-pressed", String(!!stream));
+    screenBtn.title = stream ? "Stop sharing your screen" : "Share your screen so I can see it";
+    input.placeholder = stream ? "Ask about your screen…" : "What can I do for you today?";
+    shareVideo.srcObject = stream;
+    if (stream) shareVideo.play().catch(() => {});
+  }
+  async function startShare() {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      stream.getVideoTracks()[0].addEventListener("ended", () => {   // the browser's own "Stop sharing" bar
+        if (share === stream) { setShare(null); restStatus("screen share ended"); }
+      });
+      setShare(stream);
+      restStatus("screen shared: your questions now look at it");
+    } catch (err) {
+      if (err.name !== "NotAllowedError") setAnswer("Screen share", esc("Couldn't start the screen share: " + err.message), "", true);
+      restStatus();
+    }
+  }
+  function stopShare() {
+    const s = share;
+    setShare(null);
+    if (s) s.getTracks().forEach(t => t.stop());
+    restStatus("screen share ended");
+  }
+  screenBtn.onclick = () => (share ? stopShare() : startShare());
+  document.getElementById("unshare").onclick = stopShare;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    screenBtn.disabled = true; screenBtn.title = "Screen sharing isn't supported in this browser";
+  }
+
+  // Grab ONE frame now and encode it as JPEG. ImageCapture reads straight from the track, so the
+  // frame is current even if this tab is in the background. Screen capture only sends frames when
+  // something changes, so on a still screen grabFrame can wait; after 1.2 s the video element's
+  // current frame is used, which is the live share's latest frame of that unchanged screen.
+  async function grabFrame() {
+    const track = share && share.getVideoTracks()[0];
+    if (!track || track.readyState !== "live") return null;
+    const at = Date.now();
+    let src = null;
+    if (window.ImageCapture) {
+      try { src = await Promise.race([new ImageCapture(track).grabFrame(), new Promise(r => setTimeout(() => r(null), 1200))]); }
+      catch { src = null; }
+    }
+    if (track.readyState !== "live") return null;      // ended while we were grabbing
+    if (!src) {
+      if (shareVideo.readyState < 2) await new Promise(r => { shareVideo.addEventListener("loadeddata", r, { once: true }); setTimeout(r, 1500); });
+      if (!shareVideo.videoWidth) return null;
+      src = shareVideo;
+    }
+    const w0 = src.videoWidth || src.width, h0 = src.videoHeight || src.height;
+    const k = Math.min(1, MAX_EDGE / Math.max(w0, h0));
+    const canvas = Object.assign(document.createElement("canvas"), { width: Math.round(w0 * k), height: Math.round(h0 * k) });
+    canvas.getContext("2d").drawImage(src, 0, 0, canvas.width, canvas.height);
+    if (src.close) src.close();
+    const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85));
+    if (!blob || blob.type !== "image/jpeg") return null;
+    return { blob, at };
+  }
+
+  function cannotSee(q) {
+    stopSpeaking(); clearBuffer(); input.value = "";
+    const line = shareState === "ended" ? LINES.share_ended : LINES.not_sharing;
+    setAnswer(q, esc(line));
+    box.dataset.sources = "still";
+    speak(line);
+    restStatus();
+  }
+
+  async function see(q) {
+    stopSpeaking(); clearBuffer();
+    if (inflight) inflight.abort();
+    const ctrl = inflight = new AbortController();
+    input.value = ""; send.disabled = true;
+    setStatus("thinking", "looking at your screen");
+    setAnswer(q, '<span class="dots">Looking</span>');
+    let caption = "";
+    try {
+      const frame = await grabFrame();
+      if (!frame) {
+        if (!shareLive()) { setShare(null); inflight = null; send.disabled = false; return cannotSee(q); }
+        throw new Error("couldn't grab a frame from the screen share");
+      }
+      if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
+      lastFrameUrl = URL.createObjectURL(frame.blob);
+      const res = await fetch(`/see?q=${encodeURIComponent(q)}&t=${frame.at}`, { method: "POST", signal: ctrl.signal,
+        headers: { "Content-Type": "image/jpeg" }, body: frame.blob });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (ctrl !== inflight) return;
+      setBrain(data.model);
+      const f = data.frame;
+      caption = `<img class="frame" src="${lastFrameUrl}" alt="The frame I looked at">` +
+        `Frame grabbed ${esc(new Date(frame.at).toLocaleTimeString())} · ${Number(f.width)}×${Number(f.height)} JPEG · ${Math.round(Number(f.bytes) / 1024)} KB`;
+      setAnswer(q, esc(data.answer), caption);
+      box.dataset.sources = "see";
+      inflight = null;
+      speak(data.answer);
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      setAnswer(q, esc("I couldn't look at your screen: " + err.message), caption, true);
+      inflight = null;
+      speak("Sorry, I couldn't look at your screen.");
+    } finally {
+      if (!inflight) send.disabled = false;
+      if (mode === "thinking" && !inflight) restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (q) handleTyped(q);
+    else if (pendingFiles.length) handleTyped("Take a look at this, please.");
+  });
+
+  // ---------------------------------------------------------------- attaching files (the + button)
+  // Picked files wait as chips above the bar and go with your next question, typed or spoken.
+  // They're read for that one question and never saved anywhere.
+  const filesEl = document.getElementById("files"), chipsEl = document.getElementById("attached");
+  const FILE_LIMITS = { image: 5 * 1024 * 1024, pdf: 20 * 1024 * 1024, text: 2 * 1024 * 1024 };
+  let pendingFiles = [];
+  const kb = n => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  function renderChips() {
+    chipsEl.innerHTML = pendingFiles.map((f, i) =>
+      `<div class="chip" title="${esc(f.name)}"><span>${esc(f.name)}</span><small>${kb(f.size)}</small>` +
+      `<button type="button" data-i="${i}" aria-label="Remove ${esc(f.name)}">×</button></div>`).join("");
+  }
+  chipsEl.addEventListener("click", e => {
+    const b = e.target.closest("button[data-i]");
+    if (b) { pendingFiles.splice(+b.dataset.i, 1); renderChips(); }
+  });
+  document.getElementById("attach").onclick = () => filesEl.click();
+  filesEl.addEventListener("change", async () => {
+    const problems = [];
+    for (const file of filesEl.files) {
+      const kind = /^image\//.test(file.type) ? "image" : file.type === "application/pdf" || /\.pdf$/i.test(file.name) ? "pdf" : "text";
+      if (file.size > FILE_LIMITS[kind]) { problems.push(`${file.name} is too big (${kb(file.size)})`); continue; }
+      if (pendingFiles.length >= 5) { problems.push("five files at a time at most"); break; }
+      const data = await new Promise((ok, fail) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).split(",")[1] || "");
+        r.onerror = () => fail(r.error);
+        r.readAsDataURL(file);
+      }).catch(() => null);
+      if (data === null) { problems.push(`couldn't read ${file.name}`); continue; }
+      pendingFiles.push({ name: file.name, type: file.type, size: file.size, data });
+    }
+    filesEl.value = "";
+    renderChips();
+    touch();
+    if (problems.length) restStatus(problems.join("; "));
+    else if (pendingFiles.length) restStatus("attached: ask about it, typed or spoken");
+    if (!micOn) input.focus();
+  });
+
+  async function attach(q) {
+    const files = pendingFiles; pendingFiles = []; renderChips();
+    stopSpeaking(); clearBuffer();
+    if (inflight) inflight.abort();
+    const ctrl = inflight = new AbortController();
+    lastQuestion = q;
+    input.value = ""; send.disabled = true;
+    const names = files.map(f => f.name).join(", ");
+    setStatus("thinking", "reading " + (files.length > 1 ? `${files.length} files` : files[0].name));
+    setAnswer(q, '<span class="dots">Reading</span>');
+    try {
+      const res = await fetch("/attach", { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, files: files.map(({ name, type, data }) => ({ name, type, data })) }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { const err = new Error(data.error || res.statusText); err.say = data.say; throw err; }
+      if (ctrl !== inflight) return;
+      setBrain(data.model);
+      setAnswer(q, esc(data.answer), "Attached: " + esc(names));
+      box.dataset.sources = "still";
+      inflight = null;
+      speak(data.answer);
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      setAnswer(q, esc("I couldn't read that: " + err.message), "Attached: " + esc(names), true);
+      inflight = null;
+      speak(err.say || "Sorry, I couldn't read that.");
+    } finally {
+      if (!inflight) send.disabled = false;
+      if (mode === "thinking" && !inflight) restStatus();
+      if (!micOn) input.focus();
+    }
+  }
+  box.addEventListener("click", e => { const a = e.target.closest("a[data-id]"); if (a) focusNode(+a.dataset.id); });
+  document.getElementById("reset").onclick = async () => {
+    stopSpeaking(); clearBuffer();
+    if (inflight) { inflight.abort(); inflight = null; send.disabled = false; }
+    await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) });
+    if (box.children.length && !(box.lastElementChild || {}).classList?.contains("divider")) {
+      const d = document.createElement("div"); d.className = "divider"; d.textContent = "New conversation";
+      box.appendChild(d); current = null; scrollFeed(); saveFeed();
+    }
+    clearHighlight(); closePanel(); restStatus();
+    if (!micOn) input.focus();
+  };
+  input.addEventListener("input", touch);
+  // The message box is a textarea: it grows to fit (typed or spoken text alike) and Enter sends.
+  const valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  const clearBtn = document.getElementById("clear");
+  function fitInput() {
+    clearBtn.classList.toggle("empty", !valueProp.get.call(input).trim());
+    input.style.height = "auto";
+    input.style.height = input.scrollHeight + "px";
+    input.scrollTop = input.scrollHeight;                 // keep the newest words in view
+  }
+  Object.defineProperty(input, "value", { get() { return valueProp.get.call(this); },
+                                          set(v) { valueProp.set.call(this, v); fitInput(); } });
+  input.addEventListener("input", fitInput);
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+    if (e.key === "Escape" && input.value) { e.preventDefault(); scrapDraft("cleared"); }
+  });
+  clearBtn.onclick = () => { scrapDraft("cleared"); if (!micOn) input.focus(); };
+  hudTick();
+  setAsleep(true);                                     // he starts asleep
+  restStatus();
+
+  window.addEventListener("resize", () => Graph.width(graphEl.clientWidth).height(graphEl.clientHeight));
+})();
+</script>
+</body>
+</html>

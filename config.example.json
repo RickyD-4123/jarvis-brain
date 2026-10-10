@@ -1,0 +1,8 @@
+{
+  "auth_type": "subscription_bridge",
+  "model": "claude-code-default",
+  "google_client_id": "TODO",
+  "google_client_secret": "TODO",
+  "workspace_root": "TODO",
+  "workspace_dirs": []
+}
