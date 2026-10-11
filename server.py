@@ -172,6 +172,14 @@ MODEL_ALREADY = "The brain array is already running {name}, sir."
 MODEL_REFUSED = ("I am afraid that model matrix is unavailable, sir. {reason} I'm still on {current}. "
                  "Here I can run {supported}.")
 
+# Effort for work mode and self-builds (Claude Code's --effort): how hard he thinks, and so how fast
+# he spends your usage. {level} is its spoken name.
+EFFORT_LEVELS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "extra-high", "max": "maximum"}
+EFFORT_SET = "Very good, sir. Work mode and self-builds will run at {level} effort from the next turn."
+EFFORT_RESET = "Very good, sir. Back to {level} effort, my standard setting."
+EFFORT_ALREADY = "I'm already working at {level} effort, sir."
+EFFORT_UNKNOWN = "I don't know that effort level, sir. I can work at low, medium, high, extra-high or maximum."
+
 # The voice: said when you wake him with only "hey Jarvis", and when he goes to sleep.
 WAKE_ACK = "Yes, sir?"
 SLEEP_LINE = "Going to sleep, sir."
@@ -688,6 +696,10 @@ WORK_APPLY_RE = re.compile(_JARVIS + r"(?:apply|ship|commit|install|merge)\s+(?:
                            r"\s*(?:changes?|work|it|them)?\s*[.!]*$", re.I)
 WORK_DISCARD_RE = re.compile(_JARVIS + r"(?:discard|scrap|throw\s+away|bin|revert)\s+(?:the\s+|those\s+|these\s+|your\s+|all\s+)?(?:changes?|work)\b", re.I)
 WORK_TRY_RE = re.compile(_JARVIS + r"(?:let\s+me\s+)?(?:try|test\s+drive|preview|show\s+me)\s+(?:it|the\s+changes?|them|that)\s*[.!]*$", re.I)
+_EFFORT = r"low|medium|high|x-?high|extra[\s-]high|max(?:imum)?|default|normal|usual|standard"
+EFFORT_RE = re.compile(_JARVIS + r"(?:(?:(?:set|change|switch|turn|put|drop|lower|raise|bump|make)\s+)?(?:your\s+|the\s+|my\s+)?"
+                       r"(?:work(?:\s*mode)?\s+)?effort(?:\s+level)?(?:\s+(?:up|down|back))?\s+(?:to\s+|at\s+)?(?P<a>" + _EFFORT + r")"
+                       r"|(?:use|go\s+with|switch\s+to|work\s+(?:at|on))\s+(?P<b>" + _EFFORT + r")\s+effort)\s*[.!]*$", re.I)
 WORK_NEW_RE = re.compile(_JARVIS + r"(?:new|fresh|start\s+a\s+new)\s+(?:work\s+)?(?:session|conversation|chat)\b", re.I)
 BUILD_STATUS_RE = re.compile(r"\b(?:how(?:'s|\s+is)\s+the\s+(?:build|upgrade)|(?:build|upgrade)\s+status|"
                              r"is\s+the\s+(?:build|upgrade)\s+(?:done|ready|finished))\b", re.I)
@@ -747,6 +759,9 @@ class Brain:
         self.model_flag = self.default_flag
         self.default_id = self.default_flag              # Claude Code's own default is learned live
         self.catalog, self.catalog_checked, self.catalog_lock = {}, False, threading.Lock()
+        # Effort for work mode and self-builds: the same deal, config.json's "effort" (else high) on restart.
+        self.default_effort = config.get("effort") if config.get("effort") in EFFORT_LEVELS else "high"
+        self.effort = self.default_effort
         # The desk's recent activity, for "call me". Seeded from the newest captures on disk.
         self.activity = deque(maxlen=30)
         for path in sorted((os.path.join(CAPTURE_DIR, f) for f in os.listdir(CAPTURE_DIR) if f.endswith(".md"))
@@ -926,6 +941,8 @@ class Brain:
         if WORK_ON_RE.match(t):
             return {"route": "work", "work": True, "say": "Very good, sir. Work mode: I'm all yours. "
                     "Tell me what we're doing; say \"leave work mode\" when we're done."}
+        if (m := EFFORT_RE.match(t)):
+            return {"route": "effort", **self.set_effort(m.group("a") or m.group("b"))}
         if APP_INSTALL_RE.match(t):
             return {"route": "app", **self.install_app()}
         if APP_UPDATE_RE.match(t):
@@ -1000,6 +1017,8 @@ class Brain:
             return self.work_preview()
         if WORK_NEW_RE.match(t):
             return {"ok": True, "say": w.new_session()}
+        if (m := EFFORT_RE.match(t)):
+            return self.set_effort(m.group("a") or m.group("b"))
         if BUILD_UNDO_RE.match(t):
             return self.builder.undo()
         if APP_UPDATE_RE.match(t) or APP_INSTALL_RE.match(t):
@@ -1264,8 +1283,7 @@ class Brain:
         on_event(event): each stream-json event as it happens (live activity on the desk).
         Returns (final text, error or None, activity: [[tool, detail]...])."""
         cmd = [self.claude, "-p", "--permission-mode", "bypassPermissions", "--strict-mcp-config",
-               "--append-system-prompt", system_append, "--effort", "high",
-               "--output-format", "stream-json", "--verbose"]
+               "--append-system-prompt", system_append, "--output-format", "stream-json", "--verbose"]
         if session:
             cmd += ["--resume", session] if resume else ["--session-id", session]
         if add_dirs:
@@ -1273,6 +1291,7 @@ class Brain:
         if deny:
             cmd += ["--disallowedTools", *deny]
         with self.lock:
+            cmd += ["--effort", self.effort]
             if self.model_flag:
                 cmd += ["--model", self.model_flag]
         run_env = os.environ.copy()
@@ -1441,6 +1460,27 @@ class Brain:
             self.model_flag = model_id
         self.log_activity(f"you switched my brain to {name}")
         return done(MODEL_SWITCHED.format(name=name))
+
+    def effort_info(self):
+        return {"level": self.effort, "name": EFFORT_LEVELS[self.effort], "default": self.effort == self.default_effort}
+
+    def set_effort(self, asked):
+        """Change work mode's and self-builds' effort: a level as said ("extra high", "max", "default")
+        or as the menu sends it ("xhigh"). Returns {"ok", "say", "effort"}."""
+        a = re.sub(r"[\s-]+", "", (asked or "").lower())
+        level = {"extrahigh": "xhigh", "maximum": "max"}.get(a, a)
+        if level in ("default", "normal", "usual", "standard"):
+            level = self.default_effort
+        if level not in EFFORT_LEVELS:
+            return {"ok": False, "say": EFFORT_UNKNOWN, "effort": self.effort_info()}
+        with self.lock:
+            was, self.effort = self.effort, level
+        name = EFFORT_LEVELS[level]
+        if level == was:
+            return {"ok": True, "say": EFFORT_ALREADY.format(level=name), "effort": self.effort_info()}
+        self.log_activity(f"you set my work effort to {name}")
+        say = (EFFORT_RESET if level == self.default_effort else EFFORT_SET).format(level=name)
+        return {"ok": True, "say": say, "effort": self.effort_info()}
 
     def see(self, question, image):
         """Answer about ONE screen frame. Deliberately stateless: the answer never enters the chat
@@ -1765,7 +1805,8 @@ class Handler(SimpleHTTPRequestHandler):
             models = [{"name": n, "id": m, "status": "unchecked" if m not in b.catalog else
                        "ok" if b.catalog[m] is None else "refused", "reason": b.catalog.get(m)} for n, m in MODEL_CATALOG]
             return self.send_json(200, {"models": models, "current": b.model_info(), "default": b.model_info(b.default_id),
-                                        "checked": b.catalog_checked})
+                                        "checked": b.catalog_checked, "effort": b.effort_info(),
+                                        "efforts": [{"level": k, "name": v} for k, v in EFFORT_LEVELS.items()]})
         if route == "/memory":
             return self.send_json(200, self.brain.memory.state())
         if route == "/build":
@@ -1792,7 +1833,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split("?")[0] == "/model":
             b = self.brain
             return self.send_json(200, {"model": b.model_info(), "default": b.model_info(b.default_id),
-                                        "checked": b.catalog_checked, "supported": b.supported()})
+                                        "checked": b.catalog_checked, "supported": b.supported(), "effort": b.effort_info()})
         return self.serve_static()
 
     def do_POST(self):
@@ -1807,7 +1848,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.handle_see()
         if route == "/attach":
             return self.handle_attach()
-        if route not in ("/chat", "/remember", "/model", "/tool_chat", "/google/disconnect", "/open_browser_tab",
+        if route not in ("/chat", "/remember", "/model", "/effort", "/tool_chat", "/google/disconnect", "/open_browser_tab",
                          "/remind", "/route", "/shutdown", "/memory", "/build", "/app", "/agent"):
             return self.send_json(404, {"error": "not found"})
         try:
@@ -1963,6 +2004,10 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self.log_error("model switch failed: %s", e)
                 return self.send_json(502, {"error": str(e), "model": self.brain.model_info()})
+
+        if route == "/effort":
+            r = self.brain.set_effort(str(data.get("level", ""))[:40])
+            return self.send_json(200 if r["ok"] else 400, r)
 
         if data.get("reset"):
             self.brain.reset()

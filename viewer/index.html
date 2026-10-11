@@ -285,6 +285,8 @@
   #modelmenu button:disabled { opacity: .4; cursor: not-allowed; }
   #modelmenu button small { color: var(--muted); font-size: 11px; }
   #modelmenu button.current { box-shadow: inset 0 0 0 1px var(--accent); }
+  #modelmenu .efforts { display: flex; gap: 3px; padding: 0 0 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+  #modelmenu .efforts button { flex: 1; justify-content: center; padding: 6px 2px; font-size: 11.5px; }
 
   /* ------------------------------------------------ settings drawer */
   #mic { position: fixed; top: 16px; right: 106px; z-index: 30; width: 36px; height: 36px; border-radius: 50%; display: grid;
@@ -374,6 +376,13 @@
   .work-steps li.say { color: var(--text); font-family: inherit; }
   .work-steps li.bad { color: #ff8b8b; }
   .work-steps li.you { color: var(--accent); font-family: inherit; }
+  .work-steps li .tok { float: right; margin-left: 10px; font-size: 11px; opacity: .65; font-family: inherit; }
+  .work-live, .work-stats { margin: 6px 0 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .work-stats b { color: var(--text); font-weight: 600; }
+  .work-ctx { display: inline-block; width: 56px; height: 4px; margin: 0 2px 0 6px; border-radius: 2px; overflow: hidden;
+    vertical-align: middle; background: var(--border); }
+  .work-ctx i { display: block; height: 100%; background: var(--accent); }
+  .work-ctx.full i { background: #ffb347; }
   #workbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; padding: 8px 12px; border-radius: 14px;
     font-size: 12.5px; background: var(--panel); border: 1px solid var(--border); backdrop-filter: blur(10px); }
   #workbar[hidden] { display: none; }
@@ -466,6 +475,7 @@
     <div><div class="k">NOTES</div><div class="v" id="sysNotes">0</div></div>
     <div><div class="k">REMINDERS</div><div class="v" id="sysRem">None</div></div>
     <div class="wide"><div class="k">NEXT</div><div class="v" id="sysNext">Nothing scheduled</div></div>
+    <div class="wide" title="How hard work mode and self-builds think. Higher uses your Claude plan faster. Change it from the Brain menu."><div class="k">WORK EFFORT</div><div class="v" id="sysEffort">…</div></div>
     <div class="wide" id="sysBuildRow" hidden><div class="k">SELF-BUILD</div><div class="v on" id="sysBuild"></div></div>
   </div>
 </div>
@@ -1368,7 +1378,14 @@
     brainEl.classList.toggle("custom", !m.default);
     brainEl.dataset.id = m.id || "";
   }
-  fetch("/model").then(r => r.json()).then(d => setBrain(d.model)).catch(() => {});
+  // Work mode's and self-builds' effort, shown in the HUD; changed from the brain menu or by voice.
+  const effortEl = document.getElementById("sysEffort");
+  function setEffort(e) {
+    if (!e) return;
+    effortEl.textContent = e.name.charAt(0).toUpperCase() + e.name.slice(1) + (e.default ? " · default" : "");
+    effortEl.dataset.level = e.level;
+  }
+  fetch("/model").then(r => r.json()).then(d => { setBrain(d.model); setEffort(d.effort); }).catch(() => {});
 
   // ---------------------------------------------------------------- the brain menu
   // Lists the models this subscription really runs (tested live the first time it opens, as a spoken
@@ -1401,6 +1418,20 @@
     const hint = document.createElement("div"); hint.className = "hint";
     hint.textContent = d.checked ? "Only models your plan really runs can be picked." : "Checking which models your plan runs…";
     menu.appendChild(hint);
+    // Effort: work mode and self-builds only (the chat itself is a single quick call).
+    setEffort(d.effort);
+    const effortHint = document.createElement("div"); effortHint.className = "hint";
+    effortHint.textContent = "Work-mode effort (higher uses your plan faster)";
+    const efforts = document.createElement("div"); efforts.className = "efforts";
+    for (const e of d.efforts || []) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = e.level === "xhigh" ? "x-high" : e.name === "maximum" ? "max" : e.name;
+      b.title = e.name + " effort";
+      if (d.effort && d.effort.level === e.level) b.classList.add("current");
+      b.onclick = () => { closeMenu(); changeEffort(e.level, `Set your effort to ${e.name}`); };
+      efforts.appendChild(b);
+    }
+    menu.prepend(effortHint, efforts);                 // on top: the model list is long
     if (!d.checked && !menu.hidden) menuPoll = setTimeout(renderMenu, 2000);
   }
   brainEl.onclick = e => {
@@ -1963,12 +1994,39 @@
     close();
     return out.join("").replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
   }
+  // How long and how much, like Claude Code's "Baked for 3m 32s": a live line while he works, a summary
+  // under each answer. Every step re-reads the whole conversation, so the context gauge is what to watch:
+  // past fresh_at the next message starts a fresh session.
+  const fmtDur = s => {
+    s = Math.max(0, Math.round(s));
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+    return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`;
+  };
+  const fmtTok = n => !n ? "0" : n < 1000 ? String(n) : n < 1e6 ? (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k" : (n / 1e6).toFixed(1) + "M";
+  function ctxMeter(used, limit) {
+    if (!used || !limit) return "";
+    const pct = Math.min(100, Math.round(used / limit * 100));
+    return `context ${fmtTok(used)} of ${fmtTok(limit)}<span class="work-ctx${pct >= 80 ? " full" : ""}" `
+      + `title="A fresh session starts past ${fmtTok(limit)}"><i style="width:${pct}%"></i></span>`;
+  }
+  function workStatsHtml(st) {
+    if (!st) return "";
+    const done = new Date(st.done * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+    const parts = [`<b>Baked for ${fmtDur(st.secs)}</b>`, `done ${esc(done)}`, `${st.steps} step${st.steps === 1 ? "" : "s"}`,
+      `${fmtTok(st.tokens)} tokens` + (st.cached != null ? ` (${fmtTok(st.cached)} re-read from cache, `
+        + `${fmtTok(st.written + st.fresh_in)} new, ${fmtTok(st.out)} output)` : "")];
+    if (st.cost) parts.push(`≈ $${st.cost.toFixed(2)} at API prices`);
+    if (st.context) parts.push(ctxMeter(st.context, st.fresh_at));
+    if (st.fresh) parts.push("fresh session");
+    if (st.context > st.fresh_at) parts.push("the next message starts a fresh one");
+    return `<p class="work-stats" title="This session so far: ${fmtTok(st.session_tokens)} tokens">${parts.join(" · ")}</p>`;
+  }
   function workReplyHtml(L) {
     const ask = L.ask ? `<div class="work-ask"><b>${esc(L.ask)}</b>` + ((L.options || []).length
       ? '<div class="work-opts">' + L.options.map((o, i) => `<button type="button" data-wopt="${esc(o)}"><kbd>${i + 1}</kbd>${esc(o)}</button>`).join("") + "</div>"
       : "") + "</div>" : "";
     const report = L.text && L.text !== L.say ? `<div class="work-report">${mdToHtml(L.text)}</div>` : "";
-    return `<p class="work-say">${esc(L.say || "Done.")}</p>` + ask + report;
+    return `<p class="work-say">${esc(L.say || "Done.")}</p>` + ask + report + workStatsHtml(L.stats);
   }
   function speakReport(L) {                           // "read it": the report, without code
     if (!L) return;
@@ -2018,8 +2076,9 @@
     touch();
     const d = await workPost({ op: "send", text: q });
     if (d.work === false) setWork(false);
+    setEffort(d.effort);
     if (d.sent && d.ok && !d.queued) {                 // a turn started: a live entry that fills in as he works
-      setAnswer(q, '<span class="dots">Working</span><details class="work-steps"><summary>Steps</summary><ol></ol></details>');
+      setAnswer(q, '<span class="dots">Working</span><p class="work-live"></p><details class="work-steps"><summary>Steps</summary><ol></ol></details>');
       workTurn = current;
       workBusy = true;
       workStepNote = "";
@@ -2038,8 +2097,14 @@
     if (!ol || e.kind === "done") return;
     const li = document.createElement("li");
     li.className = { text: "say", you: "you", queued: "you", check: e.ok === false ? "bad" : "" }[e.kind] || "";
-    li.textContent = e.kind === "queued" ? "You (while I worked): " + e.text : e.kind === "you" ? "" : e.text;
+    li.textContent = e.kind === "queued" ? "You (while I worked): " + e.text : e.kind === "you" ? ""
+      : e.kind === "text" ? e.text.replace(/^(?:SAY|ASK|OPTIONS):\s*/gm, "") : e.text;
     if (!li.textContent) return;
+    if (e.tok) {                                      // what this step cost: mostly the conversation, re-read
+      const tk = document.createElement("span");
+      tk.className = "tok"; tk.textContent = fmtTok(e.tok) + " tok"; tk.title = "Tokens this step";
+      li.appendChild(tk);
+    }
     ol.appendChild(li);
     ol.scrollTop = ol.scrollHeight;
     const s = workTurn.querySelector(".work-steps summary");
@@ -2048,15 +2113,20 @@
   }
   function renderWorkbar(d) {
     const files = d.pending || [];
-    workbar.hidden = !workMode || (!files.length && !d.applying && !d.queue);
+    // In work mode the bar is the session's dashboard: changes waiting, the context gauge, Stop / New session.
+    workbar.hidden = !workMode || (!files.length && !d.applying && !d.queue && !d.busy && !d.session);
     if (workbar.hidden) return;
     const busy = d.busy || d.applying;
-    workbar.innerHTML = `<span class="grow">${d.applying ? "Checking and applying…" : files.length
+    const session = d.session ? [`${d.turns} turn${d.turns === 1 ? "" : "s"} this session`, ctxMeter(d.context, d.fresh_at)].filter(Boolean).join(" · ") : "";
+    const note = [d.applying ? "Checking and applying…" : files.length
       ? `${files.length} file${files.length === 1 ? "" : "s"} changed in my workbench: ${files.slice(0, 3).map(([, p]) => esc(p)).join(", ")}`
-        + (files.length > 3 ? "…" : "") : ""}${d.queue ? ` · ${d.queue} message${d.queue === 1 ? "" : "s"} queued` : ""}</span>`
+        + (files.length > 3 ? "…" : "") : "", d.queue ? `${d.queue} message${d.queue === 1 ? "" : "s"} queued` : "", session];
+    workbar.innerHTML = `<span class="grow">${note.filter(Boolean).join(" · ")}</span>`
+      + (d.busy ? `<button type="button" data-wop="stop">Stop</button>` : "")
       + (files.length ? `<button type="button" data-wop="preview" ${busy ? "disabled" : ""}>Try it</button>`
       + `<button type="button" data-wop="apply" class="apply" ${busy ? "disabled" : ""}>Apply</button>`
-      + `<button type="button" data-wop="discard" ${busy ? "disabled" : ""}>Discard</button>` : "");
+      + `<button type="button" data-wop="discard" ${busy ? "disabled" : ""}>Discard</button>` : "")
+      + (d.session && !busy ? `<button type="button" data-wop="new" title="Start a fresh conversation: cheaper steps; my notes and your changes stay">New session</button>` : "");
   }
   workbar.addEventListener("click", async e => {
     const btn = e.target.closest("button[data-wop]");
@@ -2064,7 +2134,8 @@
     workbar.querySelectorAll("button").forEach(b => { b.disabled = true; });
     const d = await workPost({ op: btn.dataset.wop });
     const say = d.say || d.error || "Done.";
-    setAnswer({ preview: "Try it", apply: "Apply the changes", discard: "Discard the changes" }[btn.dataset.wop], esc(say), "", d.ok === false);
+    setAnswer({ preview: "Try it", apply: "Apply the changes", discard: "Discard the changes", stop: "Stop",
+                new: "New session" }[btn.dataset.wop], esc(say), "", d.ok === false);
     speak(say, Infinity);
     workPoll();
   });
@@ -2084,7 +2155,7 @@
     if (first) {                                       // page just opened: don't replay old answers
       workLastN = (d.last || {}).n || 0;
       lastWork = d.last && d.last.n ? d.last : null;
-      if (d.busy) { setAnswer("Still working", '<span class="dots">Working</span><details class="work-steps"><summary>Steps</summary><ol></ol></details>'); workTurn = current; }
+      if (d.busy) { setAnswer("Still working", '<span class="dots">Working</span><p class="work-live"></p><details class="work-steps"><summary>Steps</summary><ol></ol></details>'); workTurn = current; }
     } else if (d.last && d.last.n > workLastN) {       // he finished (a turn, or an apply)
       workLastN = d.last.n;
       lastWork = d.last;
@@ -2105,11 +2176,27 @@
       if (d.last.reload) setTimeout(() => location.reload(), 6000);
     }
     workBusy = !!(d.busy || d.applying);
+    workLive = d.turn || null;
+    if (d.fresh_at) workFreshAt = d.fresh_at;
+    workTick();
     if (workBusy) setStatus("thinking", d.applying ? "checking the changes" : workStepNote || "working");
     else if (mode === "thinking" && !inflight) restStatus();
     renderWorkbar(d);
     workTimer = setTimeout(workPoll, workBusy ? 800 : workMode ? 3000 : 15000);
   }
+  // The live clock: ticks every second between polls; the tab title carries it too, for when you look away.
+  let workLive = null, workFreshAt = 100000;
+  const workPageTitle = document.title;
+  function workTick() {
+    const on = workBusy && workLive, secs = on ? Date.now() / 1000 - workLive.started : 0;
+    const el = on && workTurn && workTurn.isConnected && workTurn.querySelector(".work-live");
+    if (el) el.innerHTML = [fmtDur(secs), `${workLive.steps} step${workLive.steps === 1 ? "" : "s"}`,
+      `${fmtTok(workLive.tokens)} tokens`, ctxMeter(workLive.context, workFreshAt), workLive.fresh ? "fresh session" : ""]
+      .filter(Boolean).join(" · ");
+    if (on) document.title = `⏳ ${fmtDur(secs)} · ${workPageTitle}`;
+    else if (document.title.startsWith("⏳")) document.title = workPageTitle;
+  }
+  setInterval(workTick, 1000);
   if (workMode) setWork(true); else workPoll();
 
   // The server stopped (the power button, or it shut itself down after the window was closed).
@@ -2229,6 +2316,7 @@
     if (routed && routed.say) {                        // a standing order (or "I'm back"): one line, no card
       stopSpeaking(); clearBuffer(); input.value = "";
       setFilter(routed.standing);
+      setEffort(routed.effort);
       setAnswer(q, esc(routed.say), routed.route === "standing" ? "Urgent filter armed: only what can't wait reaches your phone" : "",
                 routed.ok === false);
       speak(routed.say, routed.route === "standing" ? undefined : Infinity);
@@ -2303,6 +2391,14 @@
       if (mode === "thinking") restStatus();
       if (!micOn) input.focus();
     }
+  }
+
+  // An effort change from the brain menu (said or typed, it comes back through /route or the work session).
+  async function changeEffort(level, text) {
+    stopSpeaking(); clearBuffer();
+    const { ok, data } = await deskAction(text, "/effort", { level }, "changing effort");
+    setEffort(data.effort);
+    setAnswer(text, esc(data.say), "", !ok); speak(data.say, Infinity);
   }
 
   // ---------------------------------------------------------------- the phone

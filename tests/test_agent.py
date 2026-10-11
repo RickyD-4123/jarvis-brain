@@ -35,6 +35,7 @@ class WorkTest(unittest.TestCase):
         git(self.src, "commit", "-q", "-m", "start")
         self.calls, self.check_results, self.turns_done = [], [], []
         self.edit = None                                  # what the fake agent writes, per call
+        self.usage = 1_000                                # context size the fake agent reports
 
     def tearDown(self):
         subprocess.run(["git", "worktree", "prune"], cwd=self.src, capture_output=True)
@@ -52,7 +53,14 @@ class WorkTest(unittest.TestCase):
         self.calls.append({"prompt": prompt, "cwd": cwd, "rules": rules, **kw})
         kw["on_event"]({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Bash", "input": {"command": "python -m unittest", "description": "Run the tests"}},
-            {"type": "text", "text": "Looking at the page now."}]}})
+            {"type": "text", "text": "Looking at the page now."}],
+            "usage": {"input_tokens": 3, "cache_read_input_tokens": self.usage}}})
+        kw["on_event"]({"type": "assistant", "parent_tool_use_id": "sub", "message": {
+            "content": [], "usage": {"input_tokens": 999_999}}})           # a sub-agent's own context
+        n = sum(1 for c in self.calls if c["session"] == kw["session"])   # like Claude Code: totals for the session so far
+        kw["on_event"]({"type": "result", "num_turns": 7, "modelUsage": {"claude-opus-5-5": {
+            "inputTokens": 30 * n, "outputTokens": 900 * n, "cacheReadInputTokens": 50_000 * n,
+            "cacheCreationInputTokens": 2_000 * n, "costUSD": 0.4213 * n}}})
         if self.edit:
             self.write("viewer/index.html", self.edit, root=cwd)
         return f"Done, sir.\n\nDetails: I edited the page ({len(self.calls)}).", None, []
@@ -96,6 +104,55 @@ class WorkTest(unittest.TestCase):
         self.assertIn("tool", kinds)
         self.assertIn("text", kinds)
         self.assertTrue(any("Run the tests" in e["text"] for e in w.view()["events"]))
+
+    def test_each_turn_reports_its_time_steps_and_tokens(self):
+        w = self.bench()
+        w.send("make it blue")
+        v = self.wait(w)
+        st = v["last"]["stats"]
+        self.assertGreaterEqual(st["secs"], 0)
+        self.assertAlmostEqual(st["done"], time.time(), delta=30)
+        self.assertEqual(st["steps"], 1, "model calls in the main conversation; sub-agents not counted")
+        self.assertEqual((st["cached"], st["written"], st["fresh_in"], st["out"]), (50_000, 2_000, 30, 900))
+        self.assertEqual(st["tokens"], 52_930)
+        self.assertEqual(st["cost"], 0.42)
+        self.assertEqual(st["context"], 1_003, "the sub-agent's context doesn't count")
+        self.assertEqual(st["session_tokens"], 52_930)
+        toks = [e.get("tok") for e in v["events"] if e["kind"] in ("tool", "text")]
+        self.assertEqual(toks, [1_003, None], "a step's tokens show once, on its first line")
+        self.assertIsNone(v["turn"], "no live clock when idle")
+        w.send("again")
+        st = self.wait(w)["last"]["stats"]
+        self.assertEqual((st["tokens"], st["cost"]), (52_930, 0.42), "this turn only, not the session so far")
+        self.assertEqual(st["session_tokens"], 2 * 52_930)
+        w.new_session()
+        w.send("fresh")
+        st = self.wait(w)["last"]["stats"]
+        self.assertEqual((st["tokens"], st["session_tokens"]), (52_930, 52_930))
+
+    def test_a_big_or_idle_session_hands_over_to_a_fresh_one(self):
+        w = self.bench()
+        self.usage = agent.FRESH_TOKENS + 1
+        w.send("add thirty stars to the galaxy")
+        self.wait(w)
+        self.assertEqual(w.view()["context"], agent.FRESH_TOKENS + 4)
+        self.usage = 5_000
+        w.send("now make them glow")
+        self.wait(w)
+        first, second = self.calls
+        self.assertFalse(second["resume"], "too big: a fresh session")
+        self.assertNotEqual(first["session"], second["session"])
+        self.assertIn("SUMMARY: they like blue", second["prompt"])
+        self.assertIn("they asked: add thirty stars to the galaxy", second["prompt"])
+        self.assertIn("your last report:", second["prompt"])
+        self.assertTrue(any("Fresh session" in e["text"] for e in w.view()["events"]))
+        w.send("and slower")                               # small again: carries on
+        self.wait(w)
+        self.assertTrue(self.calls[2]["resume"])
+        w._set(last_turn=time.time() - agent.FRESH_IDLE - 1)
+        w.send("one more thing")                           # idle for hours: fresh again
+        self.wait(w)
+        self.assertFalse(self.calls[3]["resume"])
 
     def test_messages_while_busy_are_queued_and_delivered_next(self):
         gate = threading.Event()

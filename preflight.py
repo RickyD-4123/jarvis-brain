@@ -498,6 +498,32 @@ def check_model_switch():
         report("pass", name, "; ".join(notes))
 
 
+def check_effort():
+    """Work-mode effort: set from the menu (/effort) and by voice (/route), a made-up level refused,
+    and whatever was set before put back afterwards. No Claude calls."""
+    name = "/effort sets work-mode effort and refuses levels that don't exist"
+    status, _, raw = request("GET", "/model", timeout=10)
+    before = (json.loads(raw).get("effort") or {}).get("level") if status == 200 else None
+    if not before:
+        report("fail", name, f"GET /model -> {status}, no effort in it")
+        return
+    problems = []
+    try:
+        status, r = post_json("/effort", {"level": "medium"})
+        if status != 200 or (r.get("effort") or {}).get("level") != "medium":
+            problems.append(f"menu: medium -> HTTP {status} {short(r)}")
+        status, r = post_json("/route", {"text": "Jarvis, set your effort to extra high"})
+        if r.get("route") != "effort" or (r.get("effort") or {}).get("level") != "xhigh":
+            problems.append(f"'set your effort to extra high' -> {short(r)}")
+        status, r = post_json("/effort", {"level": "ludicrous"})
+        if status != 400 or (r.get("effort") or {}).get("level") != "xhigh":
+            problems.append(f"'ludicrous' was not refused: HTTP {status} {short(r)}")
+    finally:
+        post_json("/effort", {"level": before})
+    report("fail" if problems else "pass", name, "; ".join(problems) or
+           f"menu, voice and refusal all work; back to {before}")
+
+
 def check_standing():
     """The routing table (every row must pass), and urgent-means-once against a stub clock."""
     import contextlib
@@ -986,6 +1012,7 @@ def main():
         check_attach()
         check_refusals()
         check_model_switch()
+        check_effort()
         check_google()
         check_standing()
         check_schedules()
@@ -1007,6 +1034,7 @@ def main():
                         "/see answers a real JPEG through Claude's vision",
                         "/attach reads a file from the + button, and refuses one it can't",
                         "/model switches brains and refuses ones that don't exist",
+                        "/effort sets work-mode effort and refuses levels that don't exist",
                         "Google tools: guards hold, and real reads work once connected",
                         "Standing orders: routing table passes, urgent means once",
                         "Schedules: reminders and the daily briefing fire once and survive restarts",
