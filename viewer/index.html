@@ -377,6 +377,30 @@
     border: 1px solid var(--border); background: transparent; color: var(--text); }
   #workbar button.apply { background: var(--accent); color: #04121f; border-color: transparent; font-weight: 600; }
   #workbar button:disabled { opacity: .5; cursor: default; }
+  /* A work reply: the spoken headline, a question with one-click answers, and the written report */
+  .work-say { margin: 0 0 6px; font-weight: 600; }
+  .work-ask { margin: 8px 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--accent);
+    background: rgba(124,196,255,.08); white-space: normal; }
+  .work-ask b { display: block; margin-bottom: 8px; }
+  .work-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .work-opts button { font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text); }
+  .work-opts button:hover { border-color: var(--accent); }
+  .work-opts button:disabled { opacity: .45; cursor: default; }
+  .work-opts button kbd { font: inherit; color: var(--muted); margin-right: 4px; }
+  .work-report { white-space: normal; font-size: 13.5px; line-height: 1.5; }
+  .work-report h3, .work-report h4 { margin: 10px 0 4px; font-size: 13px; letter-spacing: .04em; }
+  .work-report p { margin: 6px 0; }
+  .work-report ul, .work-report ol { margin: 4px 0; padding-left: 20px; }
+  .work-report li { margin: 2px 0; }
+  .work-report code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 1px 5px; border-radius: 5px;
+    background: rgba(255,255,255,.08); }
+  .work-report pre { margin: 6px 0; padding: 10px; border-radius: 8px; background: rgba(0,0,0,.3); overflow: auto; max-height: 340px; }
+  .work-report pre code { padding: 0; background: none; white-space: pre; }
+  .work-report a { color: var(--accent); }
+  .work-report table { border-collapse: collapse; margin: 6px 0; font-size: 12.5px; }
+  .work-report th, .work-report td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .work-report th { color: var(--muted); font-weight: 600; }
 
   @media (max-width: 1180px) {
     :root { --avw: clamp(240px, 30vw, 320px); }
@@ -466,6 +490,18 @@
       <select id="memKind" aria-label="Kind"></select>
       <input id="memText" maxlength="300" placeholder="Add something I should know" aria-label="New memory">
     </form>
+  </section>
+  <section>
+    <h3>Work mode</h3>
+    <label>How much I say
+      <select id="workVoice">
+        <option value="quiet">Quiet: sounds only</option>
+        <option value="brief">Brief: one-line headlines</option>
+        <option value="full">Full: read the whole report</option>
+      </select>
+    </label>
+    <p class="note">Code and details are always on screen, never read out. Say “read it” to hear a report,
+      “skip” to stop, “quiet”, “brief” or “full” to change this, or “option two” to pick an answer.</p>
   </section>
   <section>
     <h3>Interface theme</h3>
@@ -1714,20 +1750,140 @@
     setAnswer(workMode ? "Work mode" : "Leave work mode", esc(say));
     speak(say);
   };
+  // ---- hearing less, seeing more: how much he says, his sounds, and his written report
+  // Quiet: sounds only. Brief (default): sounds + the one-line SAY headline (and any question). Full: the
+  // report too, minus code. Code and detail are always on screen, never read unless you say "read it".
+  let workVoice = "brief", lastWork = null, workStepNote = "";
+  try { workVoice = localStorage.getItem("jarvis.workVoice") || "brief"; } catch (_) {}
+  const workVoiceSel = document.getElementById("workVoice");
+  workVoiceSel.value = workVoice;
+  function setWorkVoice(v) {
+    workVoice = v; workVoiceSel.value = v;
+    try { localStorage.setItem("jarvis.workVoice", v); } catch (_) {}
+  }
+  workVoiceSel.onchange = () => setWorkVoice(workVoiceSel.value);
+  // Short tones instead of words: started, done, needs you, failed.
+  function workSound(kind) {
+    if (MUTED) return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const notes = { start: [[660, 0, .07]], done: [[660, 0, .09], [990, .11, .16]],
+                      ask: [[784, 0, .09], [1046, .12, .09], [1318, .24, .16]], fail: [[392, 0, .14], [262, .17, .24]] }[kind] || [];
+      notes.forEach(([f, t, len]) => {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain(), at = audioCtx.currentTime + t;
+        o.frequency.value = f; o.type = "sine";
+        g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.16, at + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+        o.connect(g).connect(audioCtx.destination); o.start(at); o.stop(at + len + 0.02);
+      });
+      window.__workSounds = (window.__workSounds || []).concat(kind);
+    } catch {}
+  }
+  // A small, safe markdown renderer for his reports: everything is escaped first, then only these marks
+  // become HTML: fenced code, `code`, **bold**, headings, bullet and numbered lists, [links](http...).
+  function mdToHtml(src) {
+    const blocks = [];
+    let text = String(src || "").replace(/```[^\n]*\n?([\s\S]*?)(?:```|$)/g, (_, code) => {
+      blocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
+      return `\u0000${blocks.length - 1}\u0000`;
+    });
+    const inline = s => esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, url) => safeUrl(url.replace(/&amp;/g, "&")) ? link(url.replace(/&amp;/g, "&"), label.replace(/&amp;/g, "&")) : m);
+    const out = [];
+    let list = null, table = [];
+    const cells = row => row.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+    const flushTable = () => {                         // | a | b | rows, the second one |---|---|
+      if (!table.length) return;
+      const rows = table.filter(r => !/^\s*\|?[\s:|-]+\|?\s*$/.test(r));
+      const head = /^\s*\|?[\s:|-]+\|?\s*$/.test(table[1] || "") ? rows.shift() : null;
+      out.push("<table>" + (head ? "<thead><tr>" + cells(head).map(c => `<th>${inline(c)}</th>`).join("") + "</tr></thead>" : "")
+        + "<tbody>" + rows.map(r => "<tr>" + cells(r).map(c => `<td>${inline(c)}</td>`).join("") + "</tr>").join("") + "</tbody></table>");
+      table = [];
+    };
+    const close = () => { flushTable(); if (list) { out.push(`</${list}>`); list = null; } };
+    for (const line of text.split("\n")) {
+      let m;
+      if (/^\s*\|.*\|\s*$/.test(line)) { if (list) { out.push(`</${list}>`); list = null; } table.push(line); continue; }
+      flushTable();
+      if ((m = line.match(/^\u0000(\d+)\u0000$/))) { close(); out.push(blocks[+m[1]]); }
+      else if ((m = line.match(/^#{1,6}\s+(.*)$/))) { close(); out.push(`<h4>${inline(m[1])}</h4>`); }
+      else if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { if (list !== "ul") { close(); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(m[1])}</li>`); }
+      else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== "ol") { close(); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(m[1])}</li>`); }
+      else if (!line.trim()) close();
+      else { close(); out.push(`<p>${inline(line)}</p>`); }
+    }
+    close();
+    return out.join("").replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
+  }
+  function workReplyHtml(L) {
+    const ask = L.ask ? `<div class="work-ask"><b>${esc(L.ask)}</b>` + ((L.options || []).length
+      ? '<div class="work-opts">' + L.options.map((o, i) => `<button type="button" data-wopt="${esc(o)}"><kbd>${i + 1}</kbd>${esc(o)}</button>`).join("") + "</div>"
+      : "") + "</div>" : "";
+    const report = L.text && L.text !== L.say ? `<div class="work-report">${mdToHtml(L.text)}</div>` : "";
+    return `<p class="work-say">${esc(L.say || "Done.")}</p>` + ask + report;
+  }
+  function speakReport(L) {                           // "read it": the report, without code
+    if (!L) return;
+    speak([L.say, L.ask, (L.text || "").replace(/```[\s\S]*?(```|$)/g, " ").replace(/`[^`]*`/g, " ").replace(/^[#>\-*\d.)\s]+/gm, "")]
+      .filter(Boolean).join(" "), Infinity);
+  }
+  function workAnnounce(L) {
+    workSound(L.error ? "fail" : L.ask ? "ask" : "done");
+    if (workVoice === "quiet") return;
+    if (workVoice === "full") return speakReport(L);
+    speak([L.say, L.ask].filter(Boolean).join(" "), Infinity);
+  }
+  box.addEventListener("click", e => {                // one-click answers to his question
+    const btn = e.target.closest("button[data-wopt]");
+    if (!btn) return;
+    btn.closest(".work-opts").querySelectorAll("button").forEach(b => { b.disabled = true; });
+    workSend(btn.dataset.wopt);
+  });
+  // Things you say in work mode that the desk handles itself, without a round trip to him.
+  const WORDS = { one: 1, two: 2, three: 3, four: 4, first: 1, second: 2, third: 3, fourth: 4 };
+  function workLocal(q) {
+    const t = q.trim().toLowerCase().replace(/^jarvis[,.!\s]*/, "").replace(/[.!?,]+$/, "");
+    if (/^(?:read (?:it|that|it out|that out|it to me|me (?:the )?(?:details|report|rest|whole thing))|(?:read|tell me) the details|go on)$/.test(t)) {
+      if (lastWork) speakReport(lastWork); return true;
+    }
+    if (/^(?:skip|skip it|skip that|enough|that's enough|okay enough|shh)$/.test(t)) { stopSpeaking(); return true; }
+    const vm = t.match(/^(?:(?:go |be |use )?(quiet|silent|brief|full)(?: mode)?|just (?:the )?(sounds|headlines)|(read everything|talk me through it))$/);
+    if (vm) {
+      const v = { quiet: "quiet", silent: "quiet", sounds: "quiet", brief: "brief", headlines: "brief", full: "full",
+                  "read everything": "full", "talk me through it": "full" }[vm[1] || vm[2] || vm[3]];
+      setWorkVoice(v);
+      const say = { quiet: "Quiet it is, sir. Sounds only.", brief: "Headlines only, sir.", full: "I'll read the whole report, sir." }[v];
+      setAnswer(q, esc(say));
+      if (v === "quiet") workSound("done"); else speak(say);
+      return true;
+    }
+    const om = t.match(/^(?:option |choice |number |the )?(one|two|three|four|first|second|third|fourth|last|[1-4])(?: one| option)?$/);
+    if (om && lastWork && (lastWork.options || []).length) {
+      const opts = lastWork.options, i = om[1] === "last" ? opts.length : (WORDS[om[1]] || +om[1]);
+      if (opts[i - 1]) { workSend(opts[i - 1]); return true; }
+    }
+    return false;
+  }
   async function workSend(q) {
+    if (workLocal(q)) { input.value = ""; return; }
     stopSpeaking(); clearBuffer(); input.value = "";
     touch();
     const d = await workPost({ op: "send", text: q });
     if (d.work === false) setWork(false);
     if (d.sent && d.ok && !d.queued) {                 // a turn started: a live entry that fills in as he works
-      setAnswer(q, '<span class="dots">Working</span><details class="work-steps" open><summary>Steps</summary><ol></ol></details>');
+      setAnswer(q, '<span class="dots">Working</span><details class="work-steps"><summary>Steps</summary><ol></ol></details>');
       workTurn = current;
       workBusy = true;
+      workStepNote = "";
+      workSound("start");
       setStatus("thinking", "working");
     } else {
       const say = d.say || d.error || "Done.";
       setAnswer(q, esc(say), "", d.ok === false);
-      speak(say, Infinity);
+      if (d.queued) workSound("start"); else if (workVoice === "quiet") workSound(d.ok === false ? "fail" : "done"); else speak(say, Infinity);
       if (d.reload) setTimeout(() => location.reload(), 4500);
     }
     workPoll();
@@ -1774,14 +1930,20 @@
     const first = workLastN < 0;
     for (const e of d.events || []) {
       workAfter = Math.max(workAfter, e.n);
-      if (!first) workStep(e);
+      if (first) continue;
+      workStep(e);
+      if (e.kind === "tool" || e.kind === "check") {   // his current step, at a glance in the status line
+        workStepNote = e.text.replace(/^[A-Za-z]+:\s*/, "").slice(0, 70);
+      }
     }
     if (first) {                                       // page just opened: don't replay old answers
       workLastN = (d.last || {}).n || 0;
-      if (d.busy) { setAnswer("Still working", '<span class="dots">Working</span><details class="work-steps" open><summary>Steps</summary><ol></ol></details>'); workTurn = current; }
+      lastWork = d.last && d.last.n ? d.last : null;
+      if (d.busy) { setAnswer("Still working", '<span class="dots">Working</span><details class="work-steps"><summary>Steps</summary><ol></ol></details>'); workTurn = current; }
     } else if (d.last && d.last.n > workLastN) {       // he finished (a turn, or an apply)
       workLastN = d.last.n;
-      const html = esc(d.last.text || d.last.say || "Done.");
+      lastWork = d.last;
+      const html = workReplyHtml(d.last);
       if (workTurn && workTurn.isConnected && workTurn.dataset.pending === "1") {
         const a = workTurn.querySelector(".a"), steps = a.querySelector(".work-steps");
         if (steps) steps.open = false;
@@ -1793,11 +1955,12 @@
         setAnswer("Jarvis", html, "", !!d.last.error);
       }
       workTurn = null;
-      speak(d.last.say || d.last.text, Infinity);
+      workStepNote = "";
+      workAnnounce(d.last);
       if (d.last.reload) setTimeout(() => location.reload(), 6000);
     }
     workBusy = !!(d.busy || d.applying);
-    if (workBusy) setStatus("thinking", d.applying ? "checking the changes" : "working");
+    if (workBusy) setStatus("thinking", d.applying ? "checking the changes" : workStepNote || "working");
     else if (mode === "thinking" && !inflight) restStatus();
     renderWorkbar(d);
     workTimer = setTimeout(workPoll, workBusy ? 800 : workMode ? 3000 : 15000);

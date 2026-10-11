@@ -86,7 +86,7 @@ class WorkTest(unittest.TestCase):
         self.assertIn("SUMMARY: they like blue", first["prompt"])
         self.assertNotIn("SUMMARY", second["prompt"], "context only starts a session; the session remembers")
         self.assertIn("Your memory", first["rules"], "the same memory system as Claude Code")
-        self.assertIn("FIRST PARAGRAPH is read", first["rules"])
+        self.assertIn("SAY: <one short spoken sentence", first["rules"])
         self.assertIn(self.tmp, first["add_dirs"])
         self.assertTrue(os.path.isdir(first["env"]["JARVIS_TEST_HOME"]))
         self.assertIn("workbench-", os.path.basename(first["cwd"]), "he works in his workbench, not the live code")
@@ -190,6 +190,29 @@ class WorkTest(unittest.TestCase):
         self.wait(w)
         self.assertNotEqual(self.calls[0]["session"], self.calls[1]["session"])
         self.assertFalse(self.calls[1]["resume"])
+
+    def test_replies_split_into_what_is_heard_and_what_is_read(self):
+        r = agent.parse_reply("SAY: The dot is in and every check passed.\n**ASK:** Keep it blue?\n"
+                              "OPTIONS: Blue | Green | Remove it\n\n## What I did\n- `viewer/index.html`: one rule\n```css\n.x{}\n```")
+        self.assertEqual(r["say"], "The dot is in and every check passed.")
+        self.assertEqual(r["ask"], "Keep it blue?")
+        self.assertEqual(r["options"], ["Blue", "Green", "Remove it"])
+        self.assertTrue(r["report"].startswith("## What I did"))
+        self.assertNotIn("SAY:", r["report"])
+        plain = agent.parse_reply("Done, sir. I changed three files and ran the tests, which all passed nicely today.\n\nDetails...")
+        self.assertEqual(plain["say"], "Done, sir.")
+        self.assertEqual(plain["ask"], "")
+        self.assertEqual(agent.parse_reply("SAY: hi\nOPTIONS: a | b")["options"], [], "options only come with a question")
+
+    def test_the_turn_keeps_headline_question_and_report_apart(self):
+        def agent_with_question(prompt, cwd, rules, timeout, **kw):
+            return "SAY: Two ways to do it.\nASK: Which one?\nOPTIONS: Fast | Careful\n\nFast is a hack; careful takes longer.", None, []
+        w = self.bench()
+        w.run_agent = agent_with_question
+        w.send("do it")
+        last = self.wait(w)["last"]
+        self.assertEqual((last["say"], last["ask"], last["options"]), ("Two ways to do it.", "Which one?", ["Fast", "Careful"]))
+        self.assertEqual(last["text"], "Fast is a hack; careful takes longer.")
 
     def test_spoken_part_is_the_first_paragraph_without_markdown(self):
         self.assertEqual(agent.first_paragraph("**Done**, sir. It's `fixed`.\n\n```py\nx = 1\n```"), "Done, sir. It's fixed.")

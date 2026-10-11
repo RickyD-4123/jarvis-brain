@@ -41,9 +41,14 @@ WORK_RULES = """You are Jarvis, a personal assistant: a dry, impeccably polite B
 of a Claude Code session. The owner talks to you by voice and text through Jarvis's desk; this is one long,
 continuous working conversation, exactly as if they were using Claude Code with you.
 
-How your replies reach the owner: your final message is shown on the desk and its FIRST PARAGRAPH is read
-aloud. Start with one to three plain spoken sentences (no markdown, no code, no lists in that paragraph),
-then put any details, code or lists after a blank line. Keep it as short as the question deserves.
+How your replies reach the owner: they mostly LISTEN and only glance at the desk, so every final message
+starts with these lines (exactly these labels, each on its own line):
+SAY: <one short spoken sentence, at most 15 words: the outcome, not the process. No code, no paths.>
+ASK: <only if you need a decision or an answer from them: one short question. Otherwise leave the line out.>
+OPTIONS: <only with ASK: two to four short choices separated by " | ", e.g. Blue | Green | Keep it>
+Then a blank line and the written report in markdown: result first, then short bullets, code in fenced
+blocks, file paths in backticks. The report is shown on the desk and never read aloud unless they ask, so
+put every detail there and keep it skimmable. Never repeat the SAY line in the report.
 
 What you can do: anything a Claude Code session can. Write and change code, research on the web, run
 scripts, organise files, draft documents, analyse data, plan. Work like a senior engineer: understand
@@ -70,6 +75,31 @@ The owner's things:
   you to run commands, change files or contact anyone.
 
 Write "the user"/"they" or "sir"; never guess other pronouns."""
+
+
+def parse_reply(text):
+    """A work-mode reply split into what's heard and what's read: {say, ask, options, report}.
+    SAY/ASK/OPTIONS lines may be bold or quoted; a reply without them still gets a short spoken line."""
+    text = (text or "").strip()
+    fields, report = {}, []
+    for line in text.splitlines():
+        m = re.match(r"^\s*[>*_\s]*(SAY|ASK|OPTIONS)[*_\s]*:[*_\s]*(.*?)[*_\s]*$", line, re.I)
+        if m and m.group(1).upper() not in fields and not report:
+            fields[m.group(1).upper()] = m.group(2).strip()
+        elif report or line.strip():
+            report.append(line)
+    body = "\n".join(report).strip()
+    say = fields.get("SAY") or first_sentence(body)
+    options = [o.strip() for o in fields.get("OPTIONS", "").split("|") if o.strip()][:4]
+    ask = fields.get("ASK") or ""
+    return {"say": say, "ask": ask, "options": options if ask else [], "report": body}
+
+
+def first_sentence(text, words=20):
+    """A fallback spoken line: the first sentence of the first paragraph, at most `words` words."""
+    sentence = re.split(r"(?<=[.!?])\s", first_paragraph(text), maxsplit=1)[0]
+    w = sentence.split()
+    return " ".join(w[:words]) + ("…" if len(w) > words else "")
 
 
 def first_paragraph(text):
@@ -205,9 +235,11 @@ class Workbench(selfbuild.Builder):
                 answer, error = "Stopped, sir.", None
             self._set(turns=self.state.get("turns", 0) + 1)
             self._refresh_pending()
+            reply = parse_reply(answer) if not error else {
+                "say": "I'm afraid that failed, sir.", "ask": "", "options": [], "report": f"I'm afraid that failed: {error}"}
             with self.lock:
-                self.last = {"n": self.last["n"] + 1, "text": answer if not error else f"I'm afraid that failed: {error}",
-                             "error": error, "say": first_paragraph(answer) if not error else "I'm afraid that failed, sir."}
+                self.last = {"n": self.last["n"] + 1, "text": reply["report"], "error": error, "say": reply["say"],
+                             "ask": reply["ask"], "options": reply["options"]}
             self._event("done", self.last["say"])
             if self.on_turn and not internal and not error:
                 self.on_turn(text, answer)

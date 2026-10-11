@@ -50,8 +50,15 @@ condenses it when it gets long), keeps its own notes between sessions in `data/a
 memory system Claude Code uses: `MEMORY.md` plus one note per fact, `agentmemory.py`), and starts each
 session with the conversation summary and what memory knows about you.
 
-- **Live**: his steps stream into the conversation as he works. "Stop" interrupts; anything you say while
-  he's busy is queued and delivered when he finishes. The first paragraph of each answer is spoken.
+- **Live**: his steps stream into the conversation as he works (the current one shows in the status
+  line). "Stop" interrupts; anything you say while he's busy is queued and delivered when he finishes.
+- **Hear little, see everything**: each reply starts with a one-line `SAY:` headline (at most ~15 words),
+  and only that is spoken. Code, output and detail go in a written report on the desk (rendered markdown:
+  code blocks, tables, lists, links), never read aloud. Short tones mark started / done / needs you /
+  failed. When he needs a decision he asks one short question (`ASK:`) with `OPTIONS:` that appear as
+  buttons: click one, or say "option two". Settings > Work mode sets how much he says: Quiet (tones
+  only), Brief (headlines, the default) or Full (the report too, minus code). By voice: "read it", "skip",
+  "quiet", "brief", "full".
 - **Building himself**: he works in his *workbench*, a persistent working copy of his code
   (`%LOCALAPPDATA%\Jarvis\builds\workbench`), and tests there (`scripts/preview.py` lets him see the
   page). Changes wait in the bar above the message box: **Try it**, **Apply** (every check runs; a failure

@@ -1177,7 +1177,8 @@ class Brain:
     def work_turn_done(self, question, answer):
         """A work-mode turn joins the same conversation: the history, the log, and memory's learning."""
         with self.lock:
-            self.history.append((question, agent.first_paragraph(answer) or answer[:600]))
+            r = agent.parse_reply(answer)
+            self.history.append((question, " ".join(x for x in (r["say"], r["ask"]) if x) or answer[:600]))
         self.observe(question, answer[:3000])
 
     def build_prompt(self, question, ids, small_talk=False):
