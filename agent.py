@@ -20,9 +20,11 @@ summary and what memory.py knows about you when a session starts.
 
 Only your own words at the desk (or its buttons) reach this session.
 """
+import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -106,7 +108,8 @@ class Workbench(selfbuild.Builder):
                 self.state = json.load(f)
         except (OSError, ValueError):
             self.state = {}
-        self.state.setdefault("id", "workbench")
+        # One workbench per data folder: the web version and the desktop app each have their own.
+        self.state.setdefault("id", "workbench-" + hashlib.sha1(self.home.lower().encode()).hexdigest()[:8])
         self.state.setdefault("requests", [])
         self.state["status"] = "open" if self.state.get("worktree") else "closed"
 
@@ -252,6 +255,11 @@ class Workbench(selfbuild.Builder):
         elif wt:                                          # the folder went missing: start clean
             self.git(self.source, "worktree", "prune", check=False)
             self._set(worktree=None)
+        leftover = os.path.join(self.root, self.state["id"])
+        if os.path.exists(leftover):                      # a folder this state doesn't know about: clear it
+            self.git(self.source, "worktree", "remove", "--force", leftover, check=False)
+            shutil.rmtree(leftover, ignore_errors=True)
+            self.git(self.source, "worktree", "prune", check=False)
         self._prepare()
         self._set(status="open", pending=[])
 

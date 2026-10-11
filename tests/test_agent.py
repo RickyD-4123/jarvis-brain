@@ -89,7 +89,7 @@ class WorkTest(unittest.TestCase):
         self.assertIn("FIRST PARAGRAPH is read", first["rules"])
         self.assertIn(self.tmp, first["add_dirs"])
         self.assertTrue(os.path.isdir(first["env"]["JARVIS_TEST_HOME"]))
-        self.assertTrue(first["cwd"].endswith("workbench"), "he works in his workbench, not the live code")
+        self.assertIn("workbench-", os.path.basename(first["cwd"]), "he works in his workbench, not the live code")
         self.assertEqual(v["last"]["say"], "Done, sir.")
         self.assertEqual(len(self.turns_done), 2, "turns join the shared conversation")
         kinds = [e["kind"] for e in w.view()["events"]]
@@ -166,6 +166,19 @@ class WorkTest(unittest.TestCase):
         self.wait(w)
         with open(os.path.join(w.state["worktree"], "viewer", "index.html"), encoding="utf-8") as f:
             self.assertEqual(f.read(), "<p>changed by hand</p>\n")
+
+    def test_each_data_folder_gets_its_own_workbench_and_leftovers_are_cleared(self):
+        other_home = os.path.join(self.tmp, "apphome")
+        os.makedirs(other_home)
+        mine = self.bench()
+        theirs = agent.Workbench(self.src, other_home, None, self.agent, workspace=lambda: [],
+                                 python=sys.executable, builds_dir=os.path.join(self.tmp, "builds"), run_checks=self.checks)
+        self.assertNotEqual(mine.state["id"], theirs.state["id"], "web version and desktop app never share one")
+        os.makedirs(os.path.join(self.tmp, "builds", mine.state["id"], "junk"))   # e.g. left by a crash
+        mine.send("hello")
+        self.wait(mine)
+        self.assertTrue(os.path.exists(os.path.join(mine.state["worktree"], ".git")))
+        self.assertEqual(self.calls[-1]["cwd"], mine.state["worktree"])
 
     def test_stop_and_new_session(self):
         w = self.bench()
