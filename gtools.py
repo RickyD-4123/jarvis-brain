@@ -634,6 +634,7 @@ class ToolChat:
         internships: an internship_apply.tools.Internships for the internship tools."""
         self.google, self.ask, self.system_prompt, self.hands = google, ask, system_prompt, hands
         self.internships = internships
+        self.context = None                               # question -> what memory knows about the user ("" if nothing)
         self.history = deque(maxlen=6)                    # (question, answer, facts from tool results)
         self.lock = threading.Lock()
         self.turn_no = 0                                  # counts his messages: "yes in the NEXT message" needs it
@@ -646,6 +647,9 @@ class ToolChat:
         now = datetime.datetime.now().astimezone()
         parts = [f"NOW: {now:%A} {now.day} {now:%B %Y}, {now:%H:%M}, local UTC offset {now:%z} "
                  f"(tomorrow is {(now + datetime.timedelta(days=1)).date().isoformat()})."]
+        known = self.context(question) if self.context else ""
+        if known:
+            parts.append("\n" + known)
         with self.lock:
             history = list(self.history)
         if history:

@@ -10,11 +10,51 @@ never submitting without your approval). Claude runs through your own Claude Cod
 - `python server.py` serves the desk on http://127.0.0.1:4700; `start_jarvis.pyw` does the same and opens a window.
 - `python preflight.py` runs the live checks against a running server.
 - `python -m unittest discover -s internship_apply/tests -t .` runs the internship tests (no network).
+- `python -m unittest discover -s tests -t .` runs the memory and self-build tests (no network).
 - See [internship_apply/README.md](internship_apply/README.md) for the internship module.
 - `desktop/` is the Windows desktop app (below). The web version above keeps working unchanged.
 
 Requirements: Windows, Python 3.11+, Claude Code signed in (`claude` on PATH), Google Chrome, and
 `pip install -r requirements.txt` for `internship_apply`.
+
+## Memory
+
+Jarvis learns about you as you talk (`memory.py`): who you are, how you like things done, the shape of
+your recurring work (assignment layouts, citation styles, course codes, templates) and what's going on
+(projects, deadlines). Every few turns, or after a quiet minute and a half, the recent turns go to the
+brain with what's already known, and it answers with strict JSON: what to add, correct or forget. Only
+your own words count as a source: what an email, document or web page says is never stored as a fact
+about you. The memories go into the chat, tool and attachment prompts as background facts, never as
+instructions.
+
+- **See and edit it**: Settings > Memory. Click a line to correct it (it's then yours, and learning never
+  rewrites it), × forgets it, the box at the bottom adds one, and the switch turns learning off.
+- **By voice**: "what do you know about me?", "forget that I work Tuesdays", "stop learning" / "start learning".
+- Stored in `data/memory.json` (git-ignored, owner-only, never served). Preflight's probe questions carry
+  `X-Jarvis-Probe: 1` and never teach it anything.
+
+## Self-build
+
+Jarvis can change his own code the way Claude Code does (`selfbuild.py`), but never straight onto the
+real files. Say or type, for example, "upgrade yourself: add a dark-mode switch to the settings".
+
+1. A throwaway git worktree is made from the code folder, including uncommitted changes.
+2. Claude Code runs in it with file tools only (read, search, edit, write; no shell, web or mail).
+3. Jarvis checks it: changed Python compiles, both unit-test suites pass, a test server (on a spare port,
+   with a scratch copy of your data) serves a page with no script errors (`scripts/page_check.py`),
+   preflight passes (failures that were already there before the change don't count), and no personal
+   data is in the code. Failures go back to Claude for up to two repairs.
+4. A desk card shows the summary, the files, the checks and the full diff, with **Apply** and **Discard**.
+   Changes to his safety code (secure.py, gtools.py, localhand.py, scripts/, this machinery...) are flagged.
+5. Apply re-checks that the files haven't changed since, copies them in and commits just those files
+   (the pre-commit hook still runs; if it refuses, the originals are put back). Page changes reload the
+   desk; Python changes need a restart; the desktop app gets them at its next rebuild.
+
+Also: "how's the build going?", "change the build: ..." (revises the waiting build), "apply the build",
+"discard the build". Only your own words at the desk can start, change or apply a build: it isn't a tool
+the chat brain can call, so an email or web page can never trigger one. The web version finds its code
+folder itself; the desktop app needs `"source_dir"` in its config.json pointing at the repo. Each build
+logs to `%LOCALAPPDATA%\Jarvis\builds\<id>.log`.
 
 ## Desktop app
 

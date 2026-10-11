@@ -52,6 +52,7 @@ def request(method, path, body=None, headers=None, timeout=240):
     """Raw HTTP: the path goes on the wire exactly as given (no client-side normalising of '..').
     POSTs carry our own Origin, as the page's do, unless the caller sets one (or None to omit it)."""
     headers = dict(headers or {})
+    headers.setdefault("X-Jarvis-Probe", "1")             # so the probes never teach Jarvis's memory anything
     if method == "POST" and "Origin" not in headers:
         headers["Origin"] = OWN_ORIGIN
     headers = {k: v for k, v in headers.items() if v is not None}
@@ -339,7 +340,7 @@ def check_claude_wrapper():
 
 def check_remember(graph):
     name = "/remember writes a real file that /chat can find"
-    captures = os.path.join(ROOT, "notes", "captures")       # a run cut off mid-way may have left its probe
+    captures = os.path.join(server.HOME, "notes", "captures")       # a run cut off mid-way may have left its probe
     for leftover in (os.listdir(captures) if os.path.isdir(captures) else []):
         if leftover.startswith("Preflight Probe Code Is ") and leftover.endswith(".md"):
             os.remove(os.path.join(captures, leftover))
@@ -350,7 +351,7 @@ def check_remember(graph):
         report("fail", name, f"HTTP {status}: {short(data.get('error'))}")
         return
     node = data.get("node") or {}
-    path = os.path.join(ROOT, *str(node.get("path", "")).split("/"))
+    path = os.path.join(server.HOME, *str(node.get("path", "")).split("/"))   # paths are relative to your data folder
     try:
         try:
             with open(path, encoding="utf-8") as f:
@@ -668,7 +669,7 @@ def check_google():
         why = ("config.json needs " + ", ".join(s.get("missing", []))) if s.get("missing") else "press Connect Google"
         report("warn", name, f"guards hold (taint refusal, no send, receipts, untrusted labels); not connected: {why}")
         return
-    g = gtools.Google(server.CONFIG_PATH, ROOT, PORT)
+    g = gtools.Google(server.CONFIG_PATH, server.HOME, PORT)
     try:
         events = g.gcal_events()
         unread = g.gmail_unread(max_results=1)
@@ -852,6 +853,8 @@ def check_served_files():
                 continue
             path = os.path.join(dirpath, fname)
             rel = os.path.relpath(path, VIEWER_DIR).replace(os.sep, "/")
+            if rel == "graph-data.js":                    # rebuilt at runtime, in your data folder when it's separate
+                path = server.build.OUT_FILE
             status, _, body = request("GET", "/" + urllib.parse.quote(rel), timeout=10)
             with open(path, "rb") as f:
                 disk = f.read()
@@ -887,6 +890,43 @@ def check_config_hidden():
         report("fail", name, "reachable: " + "; ".join(leaks))
     else:
         report("pass", name, f"{len(paths)} paths tried, including ../ and encoded traversal: none served it")
+
+
+def check_memory_and_build():
+    """Memory: the panel's add/delete round trip and "what do you know about me" (no model call).
+    Self-build: status is served, and the routing sends build commands to it, never to the chat brain."""
+    name = "Memory and self-build: panel round trip, voice commands routed"
+    problems = []
+    status, _, raw = request("GET", "/memory", timeout=10)
+    state = json.loads(raw) if status == 200 else {}
+    if not {"enabled", "items", "kinds"} <= set(state):
+        problems.append(f"GET /memory -> {status}")
+    probe = f"preflight probe {random.randint(1000, 9999)}, delete me"
+    _, added = post_json("/memory", {"op": "add", "kind": "about", "text": probe})
+    item = next((m for m in added.get("items", []) if m.get("text") == probe), None)
+    if not item:
+        problems.append("adding a memory from the panel failed")
+    else:
+        _, after = post_json("/memory", {"op": "delete", "id": item["id"]})
+        if any(m.get("text") == probe for m in after.get("items", [])):
+            problems.append("deleting a memory from the panel failed")
+    _, routed = post_json("/route", {"text": "What do you know about me?"})
+    if routed.get("route") != "memory" or not routed.get("say"):
+        problems.append(f"'what do you know about me' routed to {routed.get('route')}")
+    _, routed = post_json("/route", {"text": "How's the build going?"})
+    if routed.get("route") != "build":
+        problems.append(f"'how's the build going' routed to {routed.get('route')}")
+    status, _, raw = request("GET", "/build", timeout=10)
+    build = json.loads(raw) if status == 200 else {}
+    if "available" not in build:
+        problems.append(f"GET /build -> {status}")
+    _, stale = post_json("/build", {"op": "apply", "id": "not-a-build"})
+    if stale.get("ok") is not False:
+        problems.append("a stale Apply button was not refused")
+    report("fail" if problems else "pass", name, "; ".join(problems) or
+           f"{len(state.get('items', []))} memories, learning {'on' if state.get('enabled') else 'OFF'}; "
+           f"self-build {'available' if build.get('available') else 'unavailable (no source_dir)'}"
+           + (f", last build {build['status']}" if build.get("status") else ""))
 
 
 def check_personal_data():
@@ -938,6 +978,7 @@ def main():
         check_served_files()
         check_security()
         check_config_hidden()
+        check_memory_and_build()
         check_personal_data()
         try:
             post_json("/chat", {"reset": True})
@@ -956,7 +997,8 @@ def main():
                         "Local hands: apps and Chrome found; workspace, link and program limits hold",
                         "Only the page itself can POST (no other site, form or hostname)",
                         "Files the browser is served match the files on disk",
-                        "config.json is not reachable from the browser"):
+                        "config.json is not reachable from the browser",
+                        "Memory and self-build: panel round trip, voice commands routed"):
             report("fail", skipped, "not run: server is down")
         check_claude_wrapper()
         check_personal_data()

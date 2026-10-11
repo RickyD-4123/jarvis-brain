@@ -197,6 +197,7 @@
   #systems .v { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #systems .v.on { color: #6bf0a8; }
   #systems .wide { grid-column: 1 / -1; }
+  #systems [hidden] { display: none; }
   #avatar { position: relative; width: var(--avw); height: var(--avw); container-type: inline-size; }
   #avatarMode { position: absolute; bottom: 4%; right: 4%; z-index: 3; width: 32px; height: 32px; border-radius: 50%;
     display: grid; place-items: center; cursor: pointer; color: var(--text); background: var(--panel);
@@ -320,6 +321,34 @@
   #settings .reset:hover { color: var(--text); }
   #settings .note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   #settings .swatch { height: 10px; border-radius: 999px; margin-top: 10px; background: linear-gradient(90deg, var(--av1), var(--av2)); }
+  /* Memory: what he has learned about you, grouped, each line editable in place */
+  #memList { max-height: 46vh; overflow-y: auto; margin: 6px -4px 0; padding: 0 4px; }
+  #memList h4 { margin: 12px 0 4px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .mem { display: flex; align-items: flex-start; gap: 6px; padding: 5px 6px; border-radius: 8px; font-size: 12.5px; line-height: 1.4; }
+  .mem:hover { background: rgba(255,255,255,.05); }
+  .mem span { flex: 1; outline: none; overflow-wrap: anywhere; border-radius: 4px; }
+  .mem span:focus { background: rgba(255,255,255,.08); box-shadow: 0 0 0 1px var(--border); }
+  .mem small { color: var(--muted); font-size: 10px; white-space: nowrap; padding-top: 2px; }
+  .mem button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .mem button:hover { color: #ff6b6b; }
+  #memAdd { display: flex; gap: 6px; margin-top: 10px; }
+  #memAdd input, #memAdd select { font: inherit; font-size: 12.5px; color: var(--text); background: rgba(255,255,255,.06);
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; min-width: 0; }
+  #memAdd input { flex: 1; }
+  #memAdd select { min-width: 0; width: 112px; }
+  #settings input[type="checkbox"] { accent-color: var(--accent, #6cf); width: 16px; height: 16px; }
+  /* Self-build cards: what changed, the checks, the diff, and Apply / Discard */
+  .build-files, .build-checks { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; }
+  .build-checks .ok::marker { content: "✔  "; color: #5fd38d; }
+  .build-checks .bad::marker { content: "✘  "; color: #ff6b6b; }
+  .build-warn { margin-top: 8px; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; background: rgba(255,180,60,.12); border: 1px solid rgba(255,180,60,.4); }
+  .build-diff pre { max-height: 300px; overflow: auto; font-size: 11px; line-height: 1.35; white-space: pre; background: rgba(0,0,0,.25); padding: 8px; border-radius: 8px; }
+  .build-diff .add { color: #7ee2a0; } .build-diff .del { color: #ff8b8b; } .build-diff .hunk { color: #8fb7ff; }
+  .build-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .build-actions button { font: inherit; font-size: 13px; padding: 6px 16px; border-radius: 999px; cursor: pointer; border: 1px solid var(--border);
+    background: transparent; color: var(--text); }
+  .build-actions button.apply { background: var(--accent, #6cf); color: #0b0d12; border-color: transparent; font-weight: 600; }
+  .build-actions button:disabled { opacity: .5; cursor: default; }
 
   @media (max-width: 1180px) {
     :root { --avw: clamp(240px, 30vw, 320px); }
@@ -380,6 +409,7 @@
     <div><div class="k">NOTES</div><div class="v" id="sysNotes">0</div></div>
     <div><div class="k">REMINDERS</div><div class="v" id="sysRem">None</div></div>
     <div class="wide"><div class="k">NEXT</div><div class="v" id="sysNext">Nothing scheduled</div></div>
+    <div class="wide" id="sysBuildRow" hidden><div class="k">SELF-BUILD</div><div class="v on" id="sysBuild"></div></div>
   </div>
 </div>
 
@@ -398,6 +428,16 @@
     <h3>Google account</h3>
     <button type="button" id="google" title="Let me read your calendar, mail and files, and save drafts (never send)">Connect Google</button>
     <p class="note" id="googleNote"></p>
+  </section>
+  <section>
+    <h3>Memory</h3>
+    <label>Learn from our conversations <input type="checkbox" id="memOn"></label>
+    <p class="note" id="memNote">What I've picked up about you. Click a line to correct it; × forgets it.</p>
+    <div id="memList"></div>
+    <form id="memAdd">
+      <select id="memKind" aria-label="Kind"></select>
+      <input id="memText" maxlength="300" placeholder="Add something I should know" aria-label="New memory">
+    </form>
   </section>
   <section>
     <h3>Interface theme</h3>
@@ -1164,8 +1204,60 @@
   // ---------------------------------------------------------------- settings drawer + the two themes
   const settings = document.getElementById("settings");
   function closeSettings() { settings.classList.remove("open"); }
-  document.getElementById("gear").onclick = e => { e.stopPropagation(); settings.classList.toggle("open"); };
+  document.getElementById("gear").onclick = e => {
+    e.stopPropagation();
+    if (settings.classList.toggle("open")) memLoad();
+  };
   document.addEventListener("click", e => { if (settings.classList.contains("open") && !settings.contains(e.target)) closeSettings(); });
+
+  // Memory: what he has learned about you (data/memory.json on the server, never committed).
+  // Every line can be corrected in place (click, type, Enter) or forgotten (×); learning can be switched off.
+  const memList = document.getElementById("memList"), memOn = document.getElementById("memOn");
+  const memKind = document.getElementById("memKind"), memText = document.getElementById("memText");
+  let memKinds = {}, memTexts = new Map();
+  async function memLoad(body) {
+    try {
+      const res = body ? await fetch("/memory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+                       : await fetch("/memory");
+      memRender(await res.json());
+    } catch { memList.innerHTML = '<p class="note">Memory is unavailable right now.</p>'; }
+  }
+  function memRender(d) {
+    memKinds = d.kinds || memKinds;
+    memOn.checked = !!d.enabled;
+    if (!memKind.options.length) memKind.innerHTML = Object.entries(memKinds).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+    const items = d.items || [];
+    memTexts = new Map(items.map(m => [m.id, m.text]));
+    memList.innerHTML = Object.keys(memKinds).map(k => {
+      const group = items.filter(m => m.kind === k);
+      return group.length ? `<h4>${esc(memKinds[k])}</h4>` + group.map(m =>
+        `<div class="mem" data-id="${esc(m.id)}"><span contenteditable="plaintext-only" spellcheck="false">${esc(m.text)}</span>`
+        + (m.source === "learned" ? '<small title="Learned from a conversation">learned</small>' : "")
+        + '<button type="button" title="Forget this" aria-label="Forget this">×</button></div>').join("") : "";
+    }).join("") || '<p class="note">Nothing yet. I pick things up as we talk.</p>';
+  }
+  memList.addEventListener("click", e => {
+    const btn = e.target.closest(".mem button");
+    if (btn) memLoad({ op: "delete", id: btn.parentElement.dataset.id });
+  });
+  memList.addEventListener("keydown", e => {
+    if (e.target.matches(".mem span") && e.key === "Enter") { e.preventDefault(); e.target.blur(); }
+  });
+  memList.addEventListener("focusout", e => {
+    if (!e.target.matches(".mem span")) return;
+    const text = e.target.textContent.trim(), id = e.target.parentElement.dataset.id;
+    if (text === memTexts.get(id)) return;                        // only a real correction makes it yours
+    if (!text) return memLoad({ op: "delete", id });
+    memLoad({ op: "update", id, text });
+  });
+  document.getElementById("memAdd").addEventListener("submit", e => {
+    e.preventDefault();
+    const text = memText.value.trim();
+    if (!text) return;
+    memText.value = "";
+    memLoad({ op: "add", kind: memKind.value, text });
+  });
+  memOn.addEventListener("change", () => memLoad({ op: "enabled", on: memOn.checked }));
   const store = { get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
                   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
   const hexToRgb = h => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
@@ -1466,6 +1558,7 @@
       const d = await (await fetch(`/desk?after=${lastCard}`)).json();
       setFilter(d.standing);
       lastReminders = d.reminders || [];
+      lastBuild = d.build || null;
       // On first load, cards missed while the page was closed arrive too (the server catches them up).
       for (const c of d.cards || []) {
         const receipts = ((c.ref && c.ref.receipts) || []).map(r => safeUrl(r.link)
@@ -1475,9 +1568,12 @@
         if (["outcome", "reply", "briefing"].includes(c.kind)) { if (mode === "thinking") restStatus(); }
         const built = c.kind === "briefing" && c.ref && c.ref.built_from
           ? `<details><summary>Built from</summary><pre>${esc(c.ref.built_from)}</pre></details>` : "";
-        setAnswer(c.title, esc(c.text) + built, receipts || (c.priority === "high" ? "Urgent" : ""), false);
+        if (c.kind === "build") setAnswer(c.title, buildCardHtml(c), "", c.ref && c.ref.build && c.ref.build.status === "failed");
+        else setAnswer(c.title, esc(c.text) + built, receipts || (c.priority === "high" ? "Urgent" : ""), false);
         if (c.quiet) continue;                         // standing order: shown, not announced
-        if (c.kind === "reminder" || c.kind === "briefing") { flashDesk(c.kind === "reminder" ? "⏰ Reminder" : "Briefing"); chime(); }
+        if (c.kind === "reminder" || c.kind === "briefing" || c.kind === "build") {
+          flashDesk({ reminder: "⏰ Reminder", briefing: "Briefing", build: "Self-build" }[c.kind]); chime();
+        }
         speak(c.kind === "reminder" ? `Reminder: ${c.text}` : c.text, c.kind === "briefing" ? Infinity : undefined);
       }
       lastCard = d.latest;
@@ -1485,6 +1581,46 @@
     } catch { if (++pollFails >= 2) setOffline(true); return; }
     pollFails = 0;
   }
+  // A self-build card: what changed, how the checks went, the full diff, and Apply / Discard while it waits.
+  const colourDiff = d => d.split("\n").map(l => {
+    const e = esc(l);
+    return /^\+(?!\+\+ )/.test(l) ? `<span class="add">${e}</span>` : /^-(?!-- )/.test(l) ? `<span class="del">${e}</span>`
+         : l.startsWith("@@") ? `<span class="hunk">${e}</span>` : e;
+  }).join("\n");
+  function buildCardHtml(c) {
+    const b = (c.ref && c.ref.build) || {};
+    const verbs = { A: "added", M: "changed", D: "deleted" };
+    const files = (b.files || []).map(([st, p]) => `<li>${esc(verbs[st] || st)} <code>${esc(p)}</code></li>`).join("");
+    const checks = (b.checks || []).map(([name, ok]) => `<li class="${ok ? "ok" : "bad"}">${esc(name)}</li>`).join("");
+    const failed = (b.checks || []).filter(([, ok]) => !ok)
+      .map(([name, , detail]) => `<details><summary>Why “${esc(name)}” failed</summary><pre>${esc(detail)}</pre></details>`).join("");
+    const warn = (b.protected || []).length ? `<div class="build-warn">This changes my safety code (${b.protected.map(esc).join(", ")}). `
+      + "Read the changes before you apply it.</div>" : "";
+    const diff = b.diff ? `<details class="build-diff"><summary>Show the changes</summary><pre>${colourDiff(b.diff)}</pre>`
+      + (b.diff_truncated ? '<p class="note">(long diff: shortened here)</p>' : "") + "</details>" : "";
+    const actions = b.status === "ready" ? `<div class="build-actions" data-build="${esc(b.id)}">`
+      + '<button type="button" class="apply">Apply</button><button type="button" class="discard">Discard</button></div>' : "";
+    return esc(c.text) + warn + (files ? `<ul class="build-files">${files}</ul>` : "")
+      + (checks ? `<ul class="build-checks">${checks}</ul>` : "") + failed + diff + actions;
+  }
+  box.addEventListener("click", async e => {
+    const btn = e.target.closest(".build-actions button");
+    if (!btn) return;
+    const wrap = btn.parentElement, op = btn.classList.contains("apply") ? "apply" : "discard";
+    wrap.querySelectorAll("button").forEach(b => { b.disabled = true; });
+    let d;
+    try {
+      d = await (await fetch("/build", { method: "POST", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ op, id: wrap.dataset.build }) })).json();
+    } catch (err) { d = { ok: false, say: "I couldn't reach the build: " + err.message }; }
+    if (d.ok || d.stale) wrap.remove();               // done (or the card is out of date): no more buttons
+    else wrap.querySelectorAll("button").forEach(b => { b.disabled = false; });
+    const say = d.say || d.error || "Done.";
+    setAnswer(op === "apply" ? "Apply the build" : "Discard the build", esc(say), "", d.ok === false);
+    speak(say, Infinity);
+    if (d.reload) setTimeout(() => location.reload(), 4500);
+  });
+
   // The server stopped (the power button, or it shut itself down after the window was closed).
   let offline = false, pollFails = 0;
   function setOffline(on) {
@@ -1523,7 +1659,7 @@
     let n = 0; const t = setInterval(() => { document.title = n++ % 2 ? baseTitle : label; if (n > 20) { clearInterval(t); document.title = baseTitle; } }, 800);
   }
   // The HUD: a clock above the reactor, and a systems panel under the brain badge.
-  let lastReminders = [];
+  let lastReminders = [], lastBuild = null;
   function hudTick() {
     const now = new Date();
     document.getElementById("clock").textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -1534,6 +1670,10 @@
     g.textContent = google.connected ? "Connected" : "Off"; g.classList.toggle("on", !!google.connected);
     document.getElementById("sysNotes").textContent = `${GRAPH.nodes.length} notes`;
     document.getElementById("sysRem").textContent = lastReminders.length ? `${lastReminders.length} pending` : "None";
+    const building = lastBuild && lastBuild.status === "running";
+    document.getElementById("sysBuildRow").hidden = !building;
+    if (building) document.getElementById("sysBuild").textContent =
+      `${lastBuild.stage || "working"} · ${Math.max(1, Math.round((Date.now() / 1000 - lastBuild.started) / 60))} min`;
     const next = lastReminders[0];
     document.getElementById("sysNext").textContent = next
       ? `${new Date(next.due * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${next.task}` : "Nothing scheduled";
@@ -1598,6 +1738,7 @@
       setAnswer(q, esc(routed.say), routed.route === "standing" ? "Urgent filter armed: only what can't wait reaches your phone" : "",
                 routed.ok === false);
       speak(routed.say, routed.route === "standing" ? undefined : Infinity);
+      if (routed.reload) setTimeout(() => location.reload(), 4500);   // an applied self-build changed the page
       return;
     }
     if (REMEMBER.test(q)) return remember(q);

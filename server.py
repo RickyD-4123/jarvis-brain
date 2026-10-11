@@ -285,8 +285,10 @@ import briefing
 import desk
 import gtools
 import localhand
+import memory
 import orders
 import secure
+import selfbuild
 import standing
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -662,9 +664,27 @@ ROUTE_INTERN_RE = re.compile(r"\b(internships?|intern|co-?ops?|placements?|job (
                              r"(?:the |my )?review queue|waiting for (?:my |your )?review|submitted by me|job offers?)\b", re.I)
 ROUTE_FOLLOW_UP_RE = re.compile(r"^\s*(yes|yeah|yep|yup|ok(ay)?|sure|please do|do it|go ahead|confirm(ed)?|that one|"
                                  r"the (first|second|third|last) one|move it|draft it|book it|add it|no,?\s)", re.I)
+# Self-build (selfbuild.py) and memory (memory.py): only ever started by your own words at the desk.
+_JARVIS = r"^\s*(?:(?:hey|yo|ay|aye|ayy)[\s,.!-]+)?(?:jarvis[\s,.!:;-]*)?(?:please\s+|can\s+you\s+|could\s+you\s+|i\s+want\s+you\s+to\s+)?"
+BUILD_START_RE = re.compile(_JARVIS + r"(?:(?:upgrade|improve|modify|rebuild|reprogram|update|build|add\s+to|give)\s+yourself"
+                            r"|(?:change|update|edit|modify|improve|upgrade|redesign)\s+your\s+(?:own\s+)?(?:code|source(?:\s+code)?|"
+                            r"interface|ui|layout|design|look|appearance|screen|page|settings(?:\s+panel)?|features?)|self[- ]?build)\b", re.I)
+BUILD_REVISE_RE = re.compile(_JARVIS + r"(?:change|tweak|revise|adjust|fix|amend)\s+(?:the|that|this)\s+(?:build|upgrade)\b", re.I)
+BUILD_APPLY_RE = re.compile(_JARVIS + r"(?:apply|install|accept|approve|ship)\s+(?:the\s+|that\s+|this\s+)?(?:self[- ]?build|build|upgrade)\b", re.I)
+BUILD_DISCARD_RE = re.compile(_JARVIS + r"(?:discard|scrap|reject|drop|bin|throw\s+away)\s+(?:the\s+|that\s+|this\s+)?(?:self[- ]?build|build|upgrade)\b", re.I)
+BUILD_STATUS_RE = re.compile(r"\b(?:how(?:'s|\s+is)\s+the\s+(?:build|upgrade)|(?:build|upgrade)\s+status|"
+                             r"is\s+the\s+(?:build|upgrade)\s+(?:done|ready|finished))\b", re.I)
+MEMORY_RECALL_RE = re.compile(r"\bwhat\s+(?:do|did)\s+you\s+(?:know|remember|recall)\s+about\s+me\b|"
+                              r"\bwhat\s+have\s+you\s+(?:learned|learnt|picked\s+up)\s+about\s+me\b", re.I)
+MEMORY_FORGET_RE = re.compile(_JARVIS + r"forget\s+(?:that|about|what|everything|the\s+fact|my|i\b)", re.I)
+MEMORY_TOGGLE_RE = re.compile(_JARVIS + r"(stop|start|resume|pause)\s+learning\b", re.I)
 ROUTE_LOCAL_RE = re.compile(r"\b(open|launch|start up|fire up|pull up|bring up)\b|\b(folders?|files?|workspace|university|uni|"
                             r"homework|assignments?|coursework|lecture notes|"
                              r"move (?:my|the|this|that|it)|rename|copy (?:my|the|this|that|it))\b", re.I)
+
+
+# Requests from preflight carry X-Jarvis-Probe: 1. Its made-up questions must never teach memory anything.
+REQUEST = threading.local()
 
 
 class Brain:
@@ -704,6 +724,17 @@ class Brain:
         self.briefing = briefing.Briefing(os.path.join(data_dir, "schedules.json"), self.google,
                                           lambda prompt, sp: self.ask_claude(prompt, system_prompt=sp)[0],
                                           orders.desktop_dir)
+        # What he learns about you from conversations, and building himself (both git-ignored data/ state).
+        self.memory = memory.Memory(os.path.join(data_dir, "memory.json"),
+                                    lambda prompt, sp: self.ask_claude(prompt, system_prompt=sp)[0])
+        self.toolchat.context = self.memory.context
+        source = config.get("source_dir")
+        source = None if is_todo(source) else source
+        if not source and not getattr(sys, "frozen", False) and os.path.exists(os.path.join(ROOT, ".git")):
+            source = ROOT                                 # the web version runs straight from its code folder
+        if os.environ.get("JARVIS_SELF_BUILD") == "0":    # a self-build's own test server
+            source = None
+        self.builder = selfbuild.Builder(source, HOME, self.cards, self.run_agent)
         if self.default_flag is None:
             threading.Thread(target=self.learn_default, daemon=True).start()
 
@@ -738,7 +769,12 @@ class Brain:
 
     def start_turn(self, text, source):
         """Run an instruction turn in the background; the outcome arrives once, as a card."""
-        threading.Thread(target=self.instruction_turn, args=(text.strip(), source), daemon=True).start()
+        probe = getattr(REQUEST, "probe", False)
+
+        def turn():
+            REQUEST.probe = probe
+            self.instruction_turn(text.strip(), source)
+        threading.Thread(target=turn, daemon=True).start()
 
     def instruction_turn(self, text, source):
         """AFTER THE CHAT: transcript -> instructions (strict JSON) -> check -> act -> one line, delivered once.
@@ -762,6 +798,7 @@ class Brain:
             self.history.append((text, line))
         receipts = [r["receipt"] for r in outcome["results"] if r.get("receipt")]
         self.log_activity(f"you asked me to: {text}")
+        self.observe(text, line)
         self.cards.add("outcome", text, line, ref={"source": source, "receipts": receipts, "push_text": line,
                                                      "results": outcome["results"]})
 
@@ -799,6 +836,11 @@ class Brain:
     def route_text(self, text, source="desk"):
         """Standing orders first. Returns {"route": standing|disarm|ignore|process, "say"?, "standing"}.
         A standing order is a status change: it is acknowledged in one line and makes no card."""
+        own = self.own_commands(text)
+        if own:
+            with self.lock:
+                self.history.append((text.strip(), own["say"]))
+            return {**own, "standing": self.standing.status()}
         route, context = standing.classify(text)
         result = {"route": route}
         if route == "standing":
@@ -826,6 +868,55 @@ class Brain:
                 self.history.append((text.strip(), result["say"]))
         result["standing"] = self.standing.status()
         return result
+
+    def own_commands(self, text):
+        """Memory and self-build commands, said or typed at the desk. Returns {"route", "say", ...} or None."""
+        t = text.strip()
+        if BUILD_APPLY_RE.match(t):
+            r = self.builder.apply()
+            if r["ok"]:
+                self.log_activity("you applied a self-build")
+            return {"route": "build", **r}
+        if BUILD_DISCARD_RE.match(t):
+            return {"route": "build", "say": self.builder.discard()}
+        if BUILD_REVISE_RE.match(t):
+            return {"route": "build", "say": self.builder.revise(t), "build": self.builder.status()}
+        if BUILD_STATUS_RE.search(t):
+            return {"route": "build", "say": self.build_status_line(), "build": self.builder.status()}
+        if BUILD_START_RE.match(t):
+            self.log_activity(f"you asked me to build: {t}")
+            return {"route": "build", "say": self.builder.start(t), "build": self.builder.status()}
+        if MEMORY_RECALL_RE.search(t):
+            return {"route": "memory", "say": self.memory.describe()}
+        m = MEMORY_TOGGLE_RE.match(t)
+        if m:
+            on = m.group(1).lower() in ("start", "resume")
+            self.memory.set_enabled(on)
+            return {"route": "memory", "say": "Very good, sir. I'll keep learning as we talk." if on else
+                    "Very good, sir. I won't learn anything new until you say so. What I already know stays; "
+                    "it's in Settings, under Memory."}
+        if MEMORY_FORGET_RE.match(t):
+            try:
+                gone = self.memory.forget(t)
+            except Exception as e:
+                return {"route": "memory", "say": f"I couldn't work out what to forget: {e}", "ok": False}
+            return {"route": "memory", "say": ("Forgotten, sir: " + "; ".join(g.rstrip(".") for g in gone) + ".") if gone
+                    else "I don't have anything like that on file, sir. Settings, under Memory, has the full list."}
+        return None
+
+    def build_status_line(self):
+        s = self.builder.status()
+        st = s.get("status")
+        if st == "running":
+            mins = max(1, round((time.time() - s["started"]) / 60))
+            return f"Still on it, sir: {s.get('stage', 'working')}, {mins} minute{'s' if mins != 1 else ''} in."
+        if st == "ready":
+            return "It's finished and passed its checks, sir. The card has the details: apply it or discard it."
+        if st == "failed":
+            return f"The last build failed, sir: {s.get('error') or 'see its card'}"
+        if st == "applied":
+            return f"The last build was applied as commit {s.get('commit')}, sir. Nothing is building now."
+        return "Nothing is building, sir. Say \"upgrade yourself\" and what you'd like, and I'll build it."
 
     def handle_reminder(self, text, source="desk"):
         """Set, list or cancel reminders. Returns {"ok", "say"}, or None if the text isn't about reminders."""
@@ -904,6 +995,7 @@ class Brain:
             result = self.toolchat.run(t)
             self.tool_turn = time.time()
             self.log_activity(f"you asked me about your mail, calendar or files: {t}")
+            self.observe(t, result["answer"])
             receipts = [f"{ {'gmail_draft': 'Draft saved', 'gcal_add': 'Event added', 'gcal_move': 'Event moved'}.get(r['tool'], r['tool'])}: "
                         f"{r.get('link') or r['id']}" for r in result["receipts"]
                         if not r["tool"].startswith("internships_")]       # listing ids are never shown or spoken
@@ -927,6 +1019,9 @@ class Brain:
 
     def build_prompt(self, question, ids, small_talk=False):
         parts = []
+        known = self.memory.context(question)
+        if known:
+            parts += [known, ""]
         if self.history:
             parts.append("CONVERSATION SO FAR:")
             for q, a in self.history:
@@ -996,6 +1091,39 @@ class Brain:
         if not error and (proc.returncode != 0 or not answer):
             error = (proc.stderr or proc.stdout or "no output").strip()[-500:]
         return answer, error, used
+
+    def run_agent(self, prompt, cwd, system_append, timeout):
+        """Self-build: one Claude Code run in a throwaway copy of the code, with file tools only (no shell,
+        web or connectors), edits accepted inside that folder. Returns (final text, error or None)."""
+        cmd = [self.claude, "-p", "--tools", "Read,Edit,Write,Glob,Grep", "--permission-mode", "acceptEdits",
+               "--no-session-persistence", "--strict-mcp-config", "--append-system-prompt", system_append,
+               "--output-format", "stream-json", "--verbose"]
+        with self.lock:
+            if self.model_flag:
+                cmd += ["--model", self.model_flag]
+        env = os.environ.copy()
+        if self.config.get("auth_type") == "subscription_bridge":
+            for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+                env.pop(var, None)
+        env.pop("CLAUDECODE", None)
+        try:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  env=env, cwd=cwd, timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            return "", f"it took longer than {timeout // 60} minutes"
+        answer, error, _ = stream_result(proc.stdout)
+        if not error and (proc.returncode != 0 or not answer):
+            error = (proc.stderr or proc.stdout or "no output").strip()[-500:]
+        return answer, error
+
+    def observe(self, question, answer):
+        """A finished conversational turn: memory may learn from it (in the background)."""
+        if getattr(REQUEST, "probe", False):
+            return
+        try:
+            self.memory.observe(question, answer)
+        except Exception as e:
+            print(f"memory: {e}", file=sys.stderr)
 
     def ask_claude(self, prompt, image=None, system_prompt=SYSTEM_PROMPT, blocks=None):
         """Answer with the current brain. With image (JPEG bytes), the frame and prompt go in as a
@@ -1132,11 +1260,14 @@ class Brain:
         blocks, names = attachment_blocks(files)
         with self.lock:
             past = "\n".join(f"Q: {q}\nA: {a}" for q, a in list(self.history)[-3:])
-        prompt = (f"EARLIER IN THIS CONVERSATION:\n{past}\n\n" if past else "") + f"QUESTION: {question}"
+        known = self.memory.context(question)
+        prompt = ((known + "\n\n" if known else "") + (f"EARLIER IN THIS CONVERSATION:\n{past}\n\n" if past else "")
+                  + f"QUESTION: {question}")
         answer, model = self.ask_claude(prompt, system_prompt=ATTACH_SYSTEM_PROMPT, blocks=blocks)
         answer = USED_RE.sub("", answer).strip()
         with self.lock:
             self.history.append((f"{question} [attached: {', '.join(names)}]", answer))
+        self.observe(f"{question} [attached their own files: {', '.join(names)}]", answer)
         self.log_activity(f"you showed me {', '.join(names)}")
         return {"answer": answer, "nodes": [], "intent": "attach", "files": names, "model": self.model_info(model)}
 
@@ -1152,6 +1283,7 @@ class Brain:
             # Born beside the existing note it most resembles (first match that isn't itself).
             related = [i for i in self.index.score(note["text"]) if i != node["id"]]
         self.log_activity(f"you filed a note: {node['label']}")
+        self.observe(text, CAPTURE_CONFIRMED.format(title=node["label"]))
         return {"node": node, "links": links, "anchor": related[0] if related else None,
                 "say": CAPTURE_CONFIRMED.format(title=node["label"])}
 
@@ -1167,6 +1299,7 @@ class Brain:
             with self.lock:
                 self.history.append((question, answer))
             self.log_activity(f"you said: {question}")
+            self.observe(question, answer)
             return {"answer": answer, "nodes": [], "intent": "smalltalk", "model": self.model_info(model)}
 
         # 2. Retrieve candidates. Include the previous question so follow-ups keep context.
@@ -1184,6 +1317,7 @@ class Brain:
         with self.lock:
             self.history.append((question, answer))
         self.log_activity(f"you asked me: {question}")
+        self.observe(question, answer)
         return {"answer": answer, "nodes": used, "intent": "notes", "model": self.model_info(model)}
 
 
@@ -1384,6 +1518,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.redirect("/?google=error&reason=" + urllib.parse.quote(str(e)))
 
     def do_GET(self):
+        REQUEST.probe = self.headers.get("X-Jarvis-Probe") == "1"
         refused = self.gate("GET")
         if refused:
             return self.refuse(*refused)
@@ -1414,7 +1549,7 @@ class Handler(SimpleHTTPRequestHandler):
             cards = b.cards.for_desk(after) if after >= 0 else b.cards.catch_up(CATCH_UP_SECONDS)
             return self.send_json(200, {"cards": b.announce(cards), "latest": b.cards.latest(),
                                         "standing": b.standing.status(),
-                                        "reminders": b.reminders.pending()})
+                                        "reminders": b.reminders.pending(), "build": b.builder.brief()})
         if self.path.split("?")[0] == "/models":
             # The brain menu: every catalog model with what's known about it. The first request starts a
             # one-off live check in the background (one tiny call per model), as a spoken switch would.
@@ -1426,6 +1561,10 @@ class Handler(SimpleHTTPRequestHandler):
                        "ok" if b.catalog[m] is None else "refused", "reason": b.catalog.get(m)} for n, m in MODEL_CATALOG]
             return self.send_json(200, {"models": models, "current": b.model_info(), "default": b.model_info(b.default_id),
                                         "checked": b.catalog_checked})
+        if route == "/memory":
+            return self.send_json(200, self.brain.memory.state())
+        if route == "/build":
+            return self.send_json(200, self.brain.builder.status())
         if self.path.split("?")[0] == "/model":
             b = self.brain
             return self.send_json(200, {"model": b.model_info(), "default": b.model_info(b.default_id),
@@ -1433,6 +1572,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self.serve_static()
 
     def do_POST(self):
+        REQUEST.probe = self.headers.get("X-Jarvis-Probe") == "1"
         refused = self.gate("POST")
         if refused:
             return self.refuse(*refused)
@@ -1444,7 +1584,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route == "/attach":
             return self.handle_attach()
         if route not in ("/chat", "/remember", "/model", "/tool_chat", "/google/disconnect", "/open_browser_tab",
-                         "/remind", "/route", "/shutdown"):
+                         "/remind", "/route", "/shutdown", "/memory", "/build"):
             return self.send_json(404, {"error": "not found"})
         try:
             length = int(self.headers["Content-Length"])         # checked by the gate: digits, within the cap
@@ -1465,6 +1605,36 @@ class Handler(SimpleHTTPRequestHandler):
             self.log_error("remember failed: %s", reason)
             return self.send_json(500, {"error": reason, "say": CAPTURE_FAILED.format(reason=reason)})
 
+        if route == "/memory":
+            # The Memory panel in Settings: add, correct or delete what he knows, or switch learning off.
+            mem, op = self.brain.memory, data.get("op")
+            if op == "add":
+                item = mem.add(str(data.get("text", ""))[:memory.MAX_TEXT], str(data.get("kind", "about")))
+                return self.send_json(200 if item else 400, {**mem.state(), "ok": bool(item)})
+            if op == "update":
+                item = mem.update(str(data.get("id", "")), data.get("text"), data.get("kind"))
+                return self.send_json(200 if item else 404, {**mem.state(), "ok": bool(item)})
+            if op == "delete":
+                ok = mem.delete(str(data.get("id", "")))
+                return self.send_json(200, {**mem.state(), "ok": ok})
+            if op == "enabled":
+                mem.set_enabled(bool(data.get("on")))
+                return self.send_json(200, {**mem.state(), "ok": True})
+            return self.send_json(400, {"error": "op must be add, update, delete or enabled"})
+        if route == "/build":
+            # The Apply / Discard buttons on a self-build card.
+            op, builder = data.get("op"), self.brain.builder
+            if data.get("id") and data.get("id") != builder.status().get("id"):
+                return self.send_json(200, {"ok": False, "stale": True,
+                                            "say": "That card is for an older build, sir. Nothing was changed."})
+            if op == "apply":
+                r = builder.apply()
+                if r["ok"]:
+                    self.brain.log_activity("you applied a self-build")
+                return self.send_json(200, r)
+            if op == "discard":
+                return self.send_json(200, {"ok": True, "say": builder.discard()})
+            return self.send_json(400, {"error": "op must be apply or discard"})
         if route == "/route":
             text = str(data.get("text", ""))[:2000]
             routed = self.brain.route_text(text)
@@ -1505,6 +1675,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 result = self.brain.toolchat.run(question)
                 self.brain.log_activity(f"you asked me about your mail or calendar: {question}")
+                self.brain.observe(question, result["answer"])
                 return self.send_json(200, {**result, "model": self.brain.model_info()})
             except subprocess.TimeoutExpired:
                 return self.send_json(504, {"error": "Claude took too long to answer"})

@@ -5,5 +5,6 @@
   "google_client_secret": "TODO",
   "workspace_root": "TODO",
   "workspace_dirs": [],
-  "fullscreen_on_start": true
+  "fullscreen_on_start": true,
+  "source_dir": "TODO"
 }

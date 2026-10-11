@@ -24,6 +24,8 @@ STRINGS_FILE = os.path.join(ROOT, "personal_strings.local.txt")
 
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
 FAKE_EMAIL_RE = re.compile(r"@(?:[\w-]+\.)*(?:example(?:\.com|\.org|\.net)?|test|invalid|localhost)$", re.I)
+# Shared no-reply addresses (a commit trailer's noreply@anthropic.com) belong to no one.
+NOREPLY_EMAIL_RE = re.compile(r"^no-?reply@", re.I)
 PHONE_RE = re.compile(r"(?<![\w.])(?:\+\d{1,3}[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?![\w.])"
                       r"|(?<![\w.])\+\d{1,3}[ .-]\d{3,4}[ .-]\d{3}[ .-]?\d{3,4}(?![\w.])")
 LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml"}
@@ -102,7 +104,7 @@ def scan_text(rel, text, strings):
             if ls in low:
                 hits.append((rel, n, "personal string", mask(s)))
         for m in EMAIL_RE.finditer(line):
-            if not lockfile and not FAKE_EMAIL_RE.search(m.group()):
+            if not lockfile and not FAKE_EMAIL_RE.search(m.group()) and not NOREPLY_EMAIL_RE.match(m.group()):
                 hits.append((rel, n, "email address", mask(m.group())))
         for m in PHONE_RE.finditer(line):
             if not FAKE_PHONE_RE.search(m.group()):

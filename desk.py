@@ -73,7 +73,7 @@ class Cards:
                 self._save()
             return [dict(c) for c in new]
 
-    def catch_up(self, seconds, kinds=("reminder", "briefing", "outcome", "reply")):
+    def catch_up(self, seconds, kinds=("reminder", "briefing", "outcome", "reply", "build")):
         """Cards of these kinds from the last `seconds` that no desk page has shown yet, marked shown."""
         with self.lock:
             cutoff, now = time.time() - seconds, time.time()
