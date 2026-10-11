@@ -852,7 +852,53 @@
     touch();
     restStatus(asleep ? undefined : note);           // asleep, nothing you said was shown, so nothing to report
   }
-  const showDraft = () => { input.value = [...buffer, interimText].filter(Boolean).join(" "); };
+  // Speech arrives as bare lowercase words ("hey jarvis what time is it"). Shown and sent as a sentence:
+  // "Hey Jarvis, what time is it?". Display only: wake, sleep, scrap and echo checks still read the raw words.
+  // `done` = nothing still mid-phrase, so the end mark can go on (it isn't added while words are arriving).
+  const PUNCT_ASK = /^(?:what|what's|whats|who|who's|whom|whose|where|where's|when|when's|why|how|how's|which|is|isn't|are|aren't|am|was|wasn't|were|weren't|do|don't|does|doesn't|did|didn't|can|can't|could|couldn't|would|wouldn't|will|won't|should|shouldn't|shall|have|haven't|has|hasn't|had|may|might|anything|any)\b/;
+  const PUNCT_EXCLAIM = /^(?:thanks|thank you|cheers|nice|great|awesome|perfect|brilliant|amazing|good (?:morning|afternoon|evening|night|job)|hello|hi|hiya|goodbye|bye|well done|nice one)\b/;
+  const PUNCT_LEAD = /^(okay|ok|yes|yeah|yep|no|nope|well|actually|alright|all right|right|thanks|thank you|sorry|oh|hmm|um|uh)\s+(?=\S)/;
+  const PUNCT_PROPER = new Map(["jarvis", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "january", "february", "april", "june", "july", "september", "october", "november", "december",
+    "google", "gmail", "youtube", "chrome", "spotify", "claude", "opus", "sonnet", "haiku", "fable", "english"]
+    .map(w => [w, w[0].toUpperCase() + w.slice(1)]).concat([["youtube", "YouTube"], ["chatgpt", "ChatGPT"], ["ok", "OK"]]));
+  const cap = s => s.replace(/^[a-z]/, c => c.toUpperCase());
+  function punctuate(raw, done = true) {
+    let t = String(raw || "").replace(/\s+/g, " ").replace(/\s+([,.?!])/g, "$1").trim();
+    if (!t) return "";
+    t = t.replace(/\b[a-z][a-z']*\b/gi, w => {
+      const l = w.toLowerCase();
+      if (l === "i" || /^i'(?:m|ll|ve|d)$/.test(l)) return "I" + w.slice(1);
+      return PUNCT_PROPER.get(l) || w;
+    });
+    let wake = "";
+    const m = t.match(WAKE_RE);
+    if (m) { wake = cap(m[0].trim().replace(/[\s,.!?:;-]+$/, "").replace(/[\s,.!-]+/, " ")); t = t.slice(m[0].length).trim(); }
+    let body = t;
+    if (body) {
+      const lower = body.toLowerCase();
+      const lead = lower.match(PUNCT_LEAD);
+      // "okay set a timer" -> "Okay, set a timer"; "yes" alone, "no worries" style phrases left as they are
+      if (lead && !/^(?:no (?:worries|problem|thanks)|right (?:now|away|here|there)|well (?:done|then))\b/.test(lower)) {
+        body = body.slice(0, lead[1].length) + "," + body.slice(lead[1].length);
+      }
+      // "...what's the weather jarvis" -> "..., Jarvis"; "... please" -> "..., please"
+      body = body.replace(/([^\s,])\s+(Jarvis)$/, "$1, $2").replace(/(\S\s+\S+[^\s,])\s+(please)$/i, "$1, $2");
+      body = cap(body);
+      if (done && !/[.?!]$/.test(body)) {
+        const first = lower.replace(PUNCT_LEAD, "").replace(/^please\s+/, "");
+        const words = body.split(" ").length;
+        body += PUNCT_ASK.test(first) || PUNCT_ASK.test(lower) || /\b(?:right|isn't it|aren't you|don't you|or not)$/i.test(body) ? "?"
+              : PUNCT_EXCLAIM.test(lower) && words <= 5 ? "!" : ".";
+      }
+    }
+    if (!wake) return body;
+    // After the wake phrase the sentence carries on in lowercase ("Hey Jarvis, what time is it?"),
+    // except for words that are always capitalised (I, Jarvis, Friday...).
+    if (body) body = body.replace(/^[A-Z][a-z']*/, w => PUNCT_PROPER.get(w.toLowerCase()) || (/^I(?:'|$)/.test(w) ? w : w.toLowerCase()));
+    return body ? `${wake}, ${body}` : wake + (done ? "." : "");
+  }
+  const showDraft = () => { input.value = punctuate([...buffer, interimText].filter(Boolean).join(" "), !interimText); };
 
   function clearBuffer() {
     clearTimeout(finishTimer); finishTimer = null;
@@ -950,7 +996,7 @@
     const rest = m ? sentence.slice(m[0].length).trim() : sentence;
     if (asleep) setAsleep(false);
     if (!rest) return wakeAck();
-    ask(rest);
+    ask(punctuate(rest));
   }
   function handleTyped(text) {                                  // typing is always deliberate: it wakes him
     touch();
