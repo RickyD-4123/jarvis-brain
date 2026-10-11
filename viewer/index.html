@@ -39,8 +39,13 @@
   #title p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 
   #legend { position: fixed; top: 70px; left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
-  #legend span { display: flex; align-items: center; gap: 8px; text-transform: capitalize; cursor: default; }
+  #legend span { display: flex; align-items: center; gap: 8px; text-transform: capitalize; cursor: pointer;
+    padding: 1px 8px 1px 0; border-radius: 6px; transition: opacity .2s; }
+  #legend span:hover b, #legend span.on b { color: var(--text); }
+  #legend.picked span:not(.on) { opacity: .4; }
   #legend i { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+  #legend b { color: var(--muted); font-weight: 400; transition: color .2s; }
+  #legend em { font-style: normal; font-size: 10px; color: var(--muted); opacity: .6; margin-left: auto; padding-left: 10px; }
 
   #panel { position: fixed; top: 0; left: 0; height: 100%; width: min(380px, 100%); z-index: 6;
     background: var(--panel); backdrop-filter: blur(14px); border-right: 1px solid var(--border);
@@ -567,7 +572,8 @@
     const href = safeUrl(u);
     return href ? `<a class="${esc(cls)}" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : esc(label);
   };
-  const PALETTE = ["#ff8a5c", "#5cc8ff", "#b48cff", "#6bf0a8", "#ffd35c", "#ff6fae", "#7ce0e6", "#c9e86b"];
+  const PALETTE = ["#ff8a5c", "#5cc8ff", "#b48cff", "#6bf0a8", "#ffd35c", "#ff6fae", "#7ce0e6", "#c9e86b",
+                   "#ff5c6c", "#8c9bff", "#e0a8ff", "#5cffd6"];
   // Captures always come last, so adding them never shifts the other folders' colours.
   const groups = [...new Set(GRAPH.nodes.map(n => n.group))].sort((a, b) =>
     (a === "captures") - (b === "captures") || a.localeCompare(b));
@@ -581,9 +587,15 @@
   function renderMeta() {
     document.getElementById("stats").textContent = `${GRAPH.nodes.length} notes indexed · ${GRAPH.links.length} connections`;
     document.getElementById("legend").innerHTML = groups.map(g =>
-      `<span style="color:${esc(colorOf(g))}"><i style="background:${esc(colorOf(g))}"></i><b style="color:var(--muted);font-weight:400">${esc(g)}</b></span>`).join("");
+      `<span data-group="${esc(g)}" style="color:${esc(colorOf(g))}"><i style="background:${esc(colorOf(g))}"></i><b>${esc(g)}</b>` +
+      `<em>${GRAPH.nodes.filter(n => n.group === g).length}</em></span>`).join("");
   }
   renderMeta();
+
+  // "#5cc8ff", 0.4 -> "rgba(92,200,255,0.4)"
+  const hexA = (hex, a) => `rgba(${[1, 3, 5].map(k => parseInt(hex.slice(k, k + 2), 16)).join(",")},${a})`;
+  // A star's core burns whiter than its glow.
+  const coreColor = g => new THREE.Color(colorOf(g)).lerp(new THREE.Color("#ffffff"), 0.35);
 
   // Soft radial glow texture shared by every node sprite.
   const glowTexture = (() => {
@@ -611,22 +623,30 @@
     .nodeId("id")
     .nodeLabel(n => `<div style="padding:4px 8px;background:rgba(0,0,0,.7);border-radius:6px">${esc(n.label)}</div>`)
     .nodeThreeObject(n => {
-      // Unlit core (true group colour) plus an additive glow sprite.
+      // A star: a white-hot core, a coloured glow and a faint wide halo, all unlit. Well-connected
+      // notes burn bigger (square root, so the hubs don't swallow their neighbours).
       const color = colorOf(n.group), group = new THREE.Group();
-      const r = 2.6 + neighbours[n.id].size * 0.22;
-      const core = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshBasicMaterial({ color }));
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: glowTexture, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.75 }));
-      glow.scale.set(r * 7, r * 7, 1);
-      group.add(core, glow);
-      n.__core = core; n.__glow = glow;
+      const r = 2.4 + Math.sqrt(neighbours[n.id].size) * 0.9;
+      const core = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshBasicMaterial({ color: coreColor(n.group) }));
+      const sprite = (scale, opacity) => {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: glowTexture, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity }));
+        s.scale.set(r * scale, r * scale, 1);
+        return s;
+      };
+      const glow = sprite(6, 0.85), halo = sprite(16, 0.16);
+      group.add(halo, core, glow);
+      n.__core = core; n.__glow = glow; n.__halo = halo;
+      n.__phase = Math.random() * Math.PI * 2; n.__lit = 1;
       return group;
     })
     .linkColor(l => {
-      const lit = !highlight || (highlight.has(linkId(l.source)) && highlight.has(linkId(l.target)));
-      if (highlight && lit) return "rgba(255,255,255,0.85)";
-      if (highlight) return "rgba(255,255,255,0.03)";
-      return l.kind === "mention" ? "rgba(170,200,255,0.55)" : "rgba(170,200,255,0.12)";
+      const s = linkId(l.source), t = linkId(l.target);
+      if (highlight) return highlight.has(s) && highlight.has(t) ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.02)";
+      // Threads inside a constellation take its colour; threads between them stay pale.
+      const gs = GRAPH.nodes[s].group, same = gs === GRAPH.nodes[t].group;
+      if (l.kind === "mention") return same ? hexA(colorOf(gs), 0.45) : "rgba(200,215,255,0.35)";
+      return same ? hexA(colorOf(gs), 0.1) : "rgba(170,200,255,0.05)";
     })
     .linkWidth(l => highlight && highlight.has(linkId(l.source)) && highlight.has(linkId(l.target)) ? 1.2 : 0)
     .linkDirectionalParticles(l => highlight && highlight.has(linkId(l.source)) && highlight.has(linkId(l.target)) ? 3 : 0)
@@ -636,43 +656,151 @@
     .onBackgroundClick(() => { clearHighlight(); closePanel(); });
 
   // Mentions pull tighter than shared-wikilink links so clusters stay readable.
-  Graph.d3Force("link").distance(l => l.kind === "mention" ? 55 : 110).strength(l => l.kind === "mention" ? 0.5 : 0.04);
+  // Threads between folders pull only lightly, or every constellation collapses into one knot.
+  const sameGroup = l => GRAPH.nodes[linkId(l.source)].group === GRAPH.nodes[linkId(l.target)].group;
+  Graph.d3Force("link").distance(l => l.kind === "mention" ? 55 : 110)
+    .strength(l => (l.kind === "mention" ? 0.5 : 0.04) * (sameGroup(l) ? 1 : 0.1));
   Graph.d3Force("charge").strength(-140);
 
-  // Starfield.
+  // Each folder gathers around its own point on a ring round the galactic core, so the galaxy reads
+  // as constellations instead of one hairball. Anchors alternate a little above and below the disc.
+  const RING = 300;
+  const anchorOf = g => {
+    const k = Math.max(groups.indexOf(g), 0), a = k / groups.length * Math.PI * 2;
+    return { x: Math.cos(a) * RING, y: (k % 2 ? -1 : 1) * 30, z: Math.sin(a) * RING };
+  };
+  let simNodes = [];
+  const clusterForce = alpha => simNodes.forEach(n => {
+    const a = anchorOf(n.group), k = 0.2 * alpha;
+    n.vx += (a.x - n.x) * k; n.vy += (a.y - n.y) * k * 1.5; n.vz += (a.z - n.z) * k;
+  });
+  clusterForce.initialize = nodes => { simNodes = nodes; };
+  Graph.d3Force("cluster", clusterForce);
+
+  const additive = (opts) => ({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, ...opts });
+
+  // Starfield: two layers, faintly tinted, so the sky has depth instead of uniform white dots.
   (() => {
-    const N = 6000, pos = new Float32Array(N * 3);
+    const tints = ["#ffffff", "#cfe0ff", "#ffe6c8", "#d8ccff"].map(c => new THREE.Color(c));
+    [[5200, 2.4, 0.75], [700, 5.5, 0.9]].forEach(([N, size, opacity]) => {
+      const pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+      for (let i = 0; i < N; i++) {
+        const r = 1800 + Math.random() * 2600, t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
+        pos[i*3] = r * Math.sin(p) * Math.cos(t); pos[i*3+1] = r * Math.sin(p) * Math.sin(t); pos[i*3+2] = r * Math.cos(p);
+        const c = tints[i % tints.length], dim = 0.45 + Math.random() * 0.55;
+        col[i*3] = c.r * dim; col[i*3+1] = c.g * dim; col[i*3+2] = c.b * dim;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+      Graph.scene().add(new THREE.Points(geo, new THREE.PointsMaterial(additive({
+        size, map: glowTexture, vertexColors: true, sizeAttenuation: true, opacity }))));
+    });
+  })();
+
+  // The galaxy the notes live in: a bright core and spiral arms of dust, turning very slowly.
+  const dust = (() => {
+    const N = 9000, ARMS = 3, RMAX = 820, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+    const inner = new THREE.Color("#ffe4bd"), mid = new THREE.Color("#8fa8ff"), outer = new THREE.Color("#b07cff"), c = new THREE.Color();
+    const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) / 1.5;
     for (let i = 0; i < N; i++) {
-      const r = 1800 + Math.random() * 2600, t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
-      pos[i*3] = r * Math.sin(p) * Math.cos(t); pos[i*3+1] = r * Math.sin(p) * Math.sin(t); pos[i*3+2] = r * Math.cos(p);
+      const f = Math.pow(Math.random(), 1.5), d = 20 + f * RMAX;
+      const a = (i % ARMS) / ARMS * Math.PI * 2 + f * 6 + gauss() * (0.22 + 0.22 * (1 - f));
+      pos[i*3] = Math.cos(a) * d + gauss() * 16; pos[i*3+2] = Math.sin(a) * d + gauss() * 16;
+      pos[i*3+1] = gauss() * (46 * (1 - f) + 10);
+      if (f < 0.45) c.copy(inner).lerp(mid, f / 0.45); else c.copy(mid).lerp(outer, (f - 0.45) / 0.55);
+      const dim = 0.35 + Math.random() * 0.65;
+      col[i*3] = c.r * dim; col[i*3+1] = c.g * dim; col[i*3+2] = c.b * dim;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    const stars = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 2.2, sizeAttenuation: true, transparent: true, opacity: 0.8, depthWrite: false }));
-    Graph.scene().add(stars);
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    const g = new THREE.Group();
+    g.add(new THREE.Points(geo, new THREE.PointsMaterial(additive({
+      size: 9, map: glowTexture, vertexColors: true, sizeAttenuation: true, opacity: 0.55 }))));
+    [[260, "#ffe9c8", 0.55], [900, "#8c7cff", 0.14]].forEach(([scale, color, opacity]) => {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial(additive({ map: glowTexture, color, opacity })));
+      s.scale.set(scale, scale, 1);
+      g.add(s);
+    });
+    Graph.scene().add(g);
+    return g;
   })();
 
-  // Slow idle rotation that pauses while the user is interacting.
+  // Each constellation gets a faint nebula behind it and its name above it, following its stars.
+  const constellations = new Map();
+  function makeLabel(text, color) {
+    const c = document.createElement("canvas"), ctx = c.getContext("2d"), font = "600 40px Orbitron, Bahnschrift, sans-serif";
+    ctx.font = font;
+    const label = text.toUpperCase().split("").join(" ");
+    c.width = Math.ceil(ctx.measureText(label).width) + 40; c.height = 64;
+    ctx.font = font; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.fillStyle = color;
+    ctx.fillText(label, c.width / 2, c.height / 2);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, opacity: 0.6 }));
+    s.scale.set(c.width / 3.4, c.height / 3.4, 1);
+    return s;
+  }
+  function constellation(g) {
+    if (!constellations.has(g)) {
+      const nebula = new THREE.Sprite(new THREE.SpriteMaterial(additive({ map: glowTexture, color: colorOf(g), opacity: 0.08 })));
+      const label = makeLabel(g, colorOf(g));
+      Graph.scene().add(nebula, label);
+      constellations.set(g, { nebula, label });
+    }
+    return constellations.get(g);
+  }
+  // Labels are drawn once the bundled font is ready, so they never fall back to a system face.
+  (document.fonts ? document.fonts.load("600 40px Orbitron") : Promise.resolve()).catch(() => {}).then(() => groups.forEach(constellation));
+  function placeConstellations() {
+    const cam = Graph.camera().position;
+    constellations.forEach((c, g) => {
+      const members = GRAPH.nodes.filter(n => n.group === g && n.x !== undefined);
+      if (!members.length) return;
+      const m = ["x", "y", "z"].map(k => members.reduce((s, n) => s + n[k], 0) / members.length);
+      const spread = Math.max(40, ...members.map(n => Math.hypot(n.x - m[0], n.y - m[1], n.z - m[2])));
+      const lit = !highlight || members.some(n => highlight.has(n.id));
+      c.nebula.position.set(m[0], m[1], m[2]); c.nebula.scale.set(spread * 3, spread * 3, 1);
+      c.nebula.material.opacity = lit ? 0.08 : 0.015;
+      c.label.position.set(m[0], m[1] + spread * 0.75 + 18, m[2]);
+      // Names fade out as the camera closes in, so a close-up isn't covered by a giant word.
+      const near = Math.min(Math.max((cam.distanceTo(c.label.position) - 220) / 320, 0), 1);
+      c.label.material.opacity = (lit ? 0.6 : 0.07) * near;
+    });
+  }
+
+  // Slow idle rotation that pauses while the user is interacting; the stars twinkle and the dust turns.
   let lastInteraction = 0, angle = 0;
-  const IDLE_MS = 6000, RADIUS = 520;
+  const IDLE_MS = 6000, RADIUS = 980;
   ["pointerdown", "wheel", "touchstart"].forEach(e => document.getElementById("graph").addEventListener(e, () => lastInteraction = Date.now(), { passive: true }));
-  Graph.cameraPosition({ x: 0, y: 60, z: RADIUS });
-  (function spin() {
+  Graph.cameraPosition({ x: 0, y: 380, z: RADIUS });
+  (function spin(now) {
     if (Date.now() - lastInteraction > IDLE_MS && !panelOpen()) {
       const cam = Graph.camera().position;
       const r = Math.hypot(cam.x, cam.z) || RADIUS;
       angle = Math.atan2(cam.x, cam.z) + 0.0012;
       Graph.cameraPosition({ x: r * Math.sin(angle), y: cam.y, z: r * Math.cos(angle) });
     }
+    const t = (now || 0) / 1000;
+    dust.rotation.y = -t * 0.012;
+    GRAPH.nodes.forEach(n => {
+      if (n.__glow) n.__glow.material.opacity = n.__lit * (0.88 + 0.12 * Math.sin(t * 1.7 + n.__phase));
+    });
+    placeConstellations();
     requestAnimationFrame(spin);
   })();
 
   function refresh() {
     GRAPH.nodes.forEach(n => {
       if (!n.__core) return;
-      n.__glow.material.opacity = isLit(n.id) ? 0.75 : 0.03;
-      n.__core.material.color.set(isLit(n.id) ? colorOf(n.group) : "#22252e");
+      n.__lit = isLit(n.id) ? 0.85 : 0.03;
+      n.__halo.material.opacity = isLit(n.id) ? 0.16 : 0;
+      n.__core.material.color.set(isLit(n.id) ? coreColor(n.group) : new THREE.Color(colorOf(n.group)).multiplyScalar(0.16));
     });
+    // The legend shows which constellations are lit.
+    document.getElementById("legend").classList.toggle("picked", !!highlight);
+    document.querySelectorAll("#legend span").forEach(s =>
+      s.classList.toggle("on", !!highlight && GRAPH.nodes.some(n => n.group === s.dataset.group && highlight.has(n.id))));
     Graph.linkColor(Graph.linkColor()).linkWidth(Graph.linkWidth())
          .linkDirectionalParticles(Graph.linkDirectionalParticles());
   }
@@ -692,11 +820,28 @@
     openPanel(node);
   }
 
+  // A folder in the legend lights its whole constellation and swings the camera round to face it.
+  function focusGroup(g) {
+    const ids = GRAPH.nodes.filter(n => n.group === g).map(n => n.id);
+    if (!ids.length) return;
+    closePanel();
+    highlight = new Set(ids);
+    refresh();
+    lastInteraction = Date.now();
+    const c = constellations.get(g), at = c ? c.nebula.position : anchorOf(g), len = Math.hypot(at.x, at.z) || 1;
+    Graph.cameraPosition({ x: at.x + at.x / len * 460, y: at.y + 240, z: at.z + at.z / len * 460 },
+                         { x: at.x, y: at.y, z: at.z }, 1400);
+  }
+  document.getElementById("legend").addEventListener("click", e => {
+    const s = e.target.closest("span[data-group]");
+    if (s) focusGroup(s.dataset.group);
+  });
+
   // A capture joins the running galaxy: same id the server gave it, born at its most related
   // note, a glow pulse, then the camera flies over. No reload; graph-data.js already has it too.
   function addNode(node, links, anchorId) {
     if (GRAPH.nodes[node.id]) return;                         // already here (e.g. after a reload)
-    if (!groups.includes(node.group)) groups.push(node.group);
+    if (!groups.includes(node.group)) { groups.push(node.group); constellation(node.group); }
     const anchor = GRAPH.nodes[anchorId];
     const at = anchor && anchor.x !== undefined ? anchor : { x: 0, y: 0, z: 0 };
     // Born on the anchor, then glides a short way outward to its resting place. It is pinned
