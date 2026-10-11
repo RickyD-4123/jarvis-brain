@@ -10,7 +10,7 @@ never submitting without your approval). Claude runs through your own Claude Cod
 - `python server.py` serves the desk on http://127.0.0.1:4700; `start_jarvis.pyw` does the same and opens a window.
 - `python preflight.py` runs the live checks against a running server.
 - `python -m unittest discover -s internship_apply/tests -t .` runs the internship tests (no network).
-- `python -m unittest discover -s tests -t .` runs the memory and self-build tests (no network).
+- `python -m unittest discover -s tests -t .` runs the memory, self-build and app-update tests (no network).
 - See [internship_apply/README.md](internship_apply/README.md) for the internship module.
 - `desktop/` is the Windows desktop app (below). The web version above keeps working unchanged.
 
@@ -33,28 +33,76 @@ instructions.
 - Stored in `data/memory.json` (git-ignored, owner-only, never served). Preflight's probe questions carry
   `X-Jarvis-Probe: 1` and never teach it anything.
 
+## Conversation memory
+
+Jarvis remembers your conversations, not just facts about you (`conversation.py`): every exchange goes
+to a log (`data/history/conversations.jsonl`); the last few stay verbatim, and older ones are folded into
+a running summary instead of being dropped, so the thread survives long chats and restarts; and each
+question pulls in the most relevant earlier exchanges, so "what did we decide about the essay?" works
+weeks later. Chat, Google, attachments and work mode all share it. Preflight's probes are never logged.
+
+## Work mode
+
+Work mode is Jarvis as a Claude Code session you talk to (`agent.py`): say "let's work" or press **Work**,
+and every message continues one persistent session with every Claude Code tool (shell, files, web,
+sub-agents), the way you'd work with Claude Code itself. It remembers the whole conversation (Claude Code
+condenses it when it gets long), keeps its own notes between sessions in `data/agent-memory/` (the same
+memory system Claude Code uses: `MEMORY.md` plus one note per fact, `agentmemory.py`), and starts each
+session with the conversation summary and what memory knows about you.
+
+- **Live**: his steps stream into the conversation as he works. "Stop" interrupts; anything you say while
+  he's busy is queued and delivered when he finishes. The first paragraph of each answer is spoken.
+- **Building himself**: he works in his *workbench*, a persistent working copy of his code
+  (`%LOCALAPPDATA%\Jarvis\builds\workbench`), and tests there (`scripts/preview.py` lets him see the
+  page). Changes wait in the bar above the message box: **Try it**, **Apply** (every check runs; a failure
+  goes back to him to fix and is re-checked; only a clean result is committed), **Discard**. Undo works too.
+- **Anything else**: your workspace folders are open to him, so documents, research, scripts and file
+  organising work the same way. He asks before anything hard to reverse.
+- **Not here**: your Google account stays with the normal desk. His file tools are denied your config and
+  secrets; no git push. His shell is unrestricted (the full-access choice), so stay in charge of what you
+  ask for.
+- "Leave work mode" (or the button) goes back to the normal desk; "new session" starts a fresh
+  conversation (his notes and the workbench stay). The one-shot "upgrade yourself: ..." builds below
+  still work too, in the background.
+
 ## Self-build
 
 Jarvis can change his own code the way Claude Code does (`selfbuild.py`), but never straight onto the
 real files. Say or type, for example, "upgrade yourself: add a dark-mode switch to the settings".
 
-1. A throwaway git worktree is made from the code folder, including uncommitted changes.
-2. Claude Code runs in it with file tools only (read, search, edit, write; no shell, web or mail).
-3. Jarvis checks it: changed Python compiles, both unit-test suites pass, a test server (on a spare port,
-   with a scratch copy of your data) serves a page with no script errors (`scripts/page_check.py`),
-   preflight passes (failures that were already there before the change don't count), and no personal
-   data is in the code. Failures go back to Claude for up to two repairs.
-4. A desk card shows the summary, the files, the checks and the full diff, with **Apply** and **Discard**.
-   Changes to his safety code (secure.py, gtools.py, localhand.py, scripts/, this machinery...) are flagged.
-5. Apply re-checks that the files haven't changed since, copies them in and commits just those files
+1. A throwaway git worktree is made from the code folder, including uncommitted changes, plus a scratch
+   copy of your data for its test servers (`$JARVIS_TEST_HOME`).
+2. Claude Code runs in it like a normal Claude Code session: shell, files, web search and fetch,
+   sub-agents, all pre-approved (`--permission-mode bypassPermissions`, effort high), with `CLAUDE.md`,
+   the recent conversation, what memory knows about you and the past builds as context. It tests its own
+   work as it goes (`scripts/preview.py` screenshots the desk from its copy). If the request is ambiguous
+   it asks first: the question is spoken and shown on a card, and your next words (or the card's answer
+   box) answer it. Answers, repairs and revisions continue the same session, so it remembers.
+3. Guardrails: no `git push`/remote/config changes, and its file tools are denied your config and secrets. Its shell could still reach them (the accepted cost of full access), so every command it ran and
+   every page it read is listed on the card, and a change to the real code folder during the build is flagged.
+4. Jarvis then checks it himself: changed Python compiles, both unit-test suites pass, a test server
+   serves a page with no script errors (`scripts/page_check.py`), preflight passes (failures that were
+   already there before the change don't count), and no personal data is in the code. Failures go back
+   to the same session for up to two repairs. Then before/after screenshots.
+5. A desk card shows the summary, screenshots, files, checks, what the builder did and the full diff, with
+   **Try it** (the changed Jarvis, live in Chrome, on a scratch copy of your data; Google is real),
+   **Apply** and **Discard**. Changes to his safety code are flagged.
+6. Apply re-checks that the files haven't changed since, copies them in and commits just those files
    (the pre-commit hook still runs; if it refuses, the originals are put back). Page changes reload the
-   desk; Python changes need a restart; the desktop app gets them at its next rebuild.
+   desk; Python changes need a restart. **Undo** (or "undo the last build") reverts that commit.
 
 Also: "how's the build going?", "change the build: ..." (revises the waiting build), "apply the build",
-"discard the build". Only your own words at the desk can start, change or apply a build: it isn't a tool
-the chat brain can call, so an email or web page can never trigger one. The web version finds its code
-folder itself; the desktop app needs `"source_dir"` in its config.json pointing at the repo. Each build
-logs to `%LOCALAPPDATA%\Jarvis\builds\<id>.log`.
+"discard the build" / "cancel the build" (also stops one that's running). Only your own words at the desk
+can start, answer, change, apply or undo a build: it isn't a tool the chat brain can call, so an email or
+web page can never trigger one. The web version finds its code folder itself; the desktop app needs
+`"source_dir"` in its config.json (an app update sets it). Each build logs to
+`%LOCALAPPDATA%\Jarvis\builds\<id>.log`; history is in `data/build_history.json`.
+
+**Updating the desktop app by voice** (`appupdate.py`): "update the app" bumps the patch version, runs
+`npm run dist` (backend exe, installer, build check), commits the version and puts up a card with
+**Install**. Install starts a helper outside Jarvis that waits for him to close, runs the installer
+silently over the old version and starts the new one; from the desktop app he closes himself, from the
+web version close the app first. Your data in `%APPDATA%\Jarvis\home` is untouched.
 
 ## Desktop app
 

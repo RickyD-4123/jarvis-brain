@@ -895,7 +895,7 @@ def check_config_hidden():
 def check_memory_and_build():
     """Memory: the panel's add/delete round trip and "what do you know about me" (no model call).
     Self-build: status is served, and the routing sends build commands to it, never to the chat brain."""
-    name = "Memory and self-build: panel round trip, voice commands routed"
+    name = "Memory, self-build and work mode: panel round trip, commands routed, probes never logged"
     problems = []
     status, _, raw = request("GET", "/memory", timeout=10)
     state = json.loads(raw) if status == 200 else {}
@@ -923,9 +923,25 @@ def check_memory_and_build():
     _, stale = post_json("/build", {"op": "apply", "id": "not-a-build"})
     if stale.get("ok") is not False:
         problems.append("a stale Apply button was not refused")
+    # Work mode: its view is served, and the switch phrase routes to it (no session is started here).
+    status, _, raw = request("GET", "/agent", timeout=10)
+    work = json.loads(raw) if status == 200 else {}
+    if not {"busy", "events", "last", "pending"} <= set(work):
+        problems.append(f"GET /agent -> {status}")
+    _, routed = post_json("/route", {"text": "Let's work."})
+    if routed.get("route") != "work" or routed.get("work") is not True:
+        problems.append(f"'let's work' routed to {routed.get('route')}")
+    # Conversation memory: preflight's own questions (marked as probes) must never reach the log.
+    log = os.path.join(server.HOME, "data", "history", "conversations.jsonl")
+    if os.path.isfile(log):
+        with open(log, encoding="utf-8") as f:
+            leaked = sum(1 for line in f if "Preflight Probe" in line or "preflight probe" in line)
+        if leaked:
+            problems.append(f"{leaked} preflight probe(s) found in the conversation log")
     report("fail" if problems else "pass", name, "; ".join(problems) or
            f"{len(state.get('items', []))} memories, learning {'on' if state.get('enabled') else 'OFF'}; "
            f"self-build {'available' if build.get('available') else 'unavailable (no source_dir)'}"
+           + f"; work mode {'busy' if work.get('busy') else 'idle'}, {len(work.get('pending') or [])} change(s) in the workbench"
            + (f", last build {build['status']}" if build.get("status") else ""))
 
 
@@ -998,7 +1014,7 @@ def main():
                         "Only the page itself can POST (no other site, form or hostname)",
                         "Files the browser is served match the files on disk",
                         "config.json is not reachable from the browser",
-                        "Memory and self-build: panel round trip, voice commands routed"):
+                        "Memory, self-build and work mode: panel round trip, commands routed, probes never logged"):
             report("fail", skipped, "not run: server is down")
         check_claude_wrapper()
         check_personal_data()

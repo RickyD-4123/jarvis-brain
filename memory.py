@@ -49,6 +49,8 @@ RULES:
 - Prefer correcting an existing memory ("update") to adding a near-duplicate. If the user contradicts or
   withdraws something, update or forget it. Most turns teach nothing new: then return empty lists.
 - Dates: today is {today}. Turn relative dates ("next Friday") into absolute ones.
+- Write "the user" or "they"; never guess gendered pronouns. Don't store requests about Jarvis himself
+  (features, upgrades) unless they say something lasting about how the user works.
 
 Reply with ONLY this JSON, no prose:
 {{"add": [{{"kind": "about|preference|work|ongoing", "text": "..."}}],

@@ -282,8 +282,11 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 import build
 import briefing
+import conversation
 import desk
 import gtools
+import agent
+import appupdate
 import localhand
 import memory
 import orders
@@ -671,7 +674,21 @@ BUILD_START_RE = re.compile(_JARVIS + r"(?:(?:upgrade|improve|modify|rebuild|rep
                             r"interface|ui|layout|design|look|appearance|screen|page|settings(?:\s+panel)?|features?)|self[- ]?build)\b", re.I)
 BUILD_REVISE_RE = re.compile(_JARVIS + r"(?:change|tweak|revise|adjust|fix|amend)\s+(?:the|that|this)\s+(?:build|upgrade)\b", re.I)
 BUILD_APPLY_RE = re.compile(_JARVIS + r"(?:apply|install|accept|approve|ship)\s+(?:the\s+|that\s+|this\s+)?(?:self[- ]?build|build|upgrade)\b", re.I)
-BUILD_DISCARD_RE = re.compile(_JARVIS + r"(?:discard|scrap|reject|drop|bin|throw\s+away)\s+(?:the\s+|that\s+|this\s+)?(?:self[- ]?build|build|upgrade)\b", re.I)
+BUILD_DISCARD_RE = re.compile(_JARVIS + r"(?:discard|scrap|reject|drop|bin|throw\s+away|cancel|stop|abort)\s+(?:the\s+|that\s+|this\s+)?(?:self[- ]?build|build|upgrade)\b", re.I)
+BUILD_UNDO_RE = re.compile(_JARVIS + r"(?:undo|revert|roll\s+back|take\s+back)\s+(?:the\s+|that\s+|this\s+|your\s+)?"
+                           r"(?:last\s+|latest\s+|previous\s+)?(?:self[- ]?build|build|upgrade|change\s+you\s+made)\b", re.I)
+APP_UPDATE_RE = re.compile(_JARVIS + r"(?:update|rebuild|upgrade|refresh)\s+(?:the\s+|your\s+)?(?:desktop\s+)?app\b", re.I)
+APP_INSTALL_RE = re.compile(_JARVIS + r"install\s+(?:the\s+)?(?:new\s+)?(?:app\s+)?(?:update|version)\b", re.I)
+# Work mode (agent.py): switched on and off by your own words, and steered while it's on.
+WORK_ON_RE = re.compile(_JARVIS + r"(?:let'?s\s+(?:get\s+to\s+)?work|let\s+us\s+work|(?:start|enter|switch\s+to|turn\s+on|go\s+into)\s+"
+                        r"work\s*mode|work\s*mode\s+on|open\s+(?:the\s+|your\s+)?workbench|let'?s\s+build\s+(?:you|yourself|something))\b", re.I)
+WORK_OFF_RE = re.compile(_JARVIS + r"(?:(?:leave|exit|close|end|stop|quit|turn\s+off)\s+(?:the\s+)?(?:work\s*mode|workbench|working)|"
+                         r"work\s*mode\s+off|that'?s\s+(?:all|enough)\s+(?:work\s+)?for\s+now)\b", re.I)
+WORK_APPLY_RE = re.compile(_JARVIS + r"(?:apply|ship|commit|install|merge)\s+(?:the\s+|those\s+|these\s+|your\s+|my\s+|that|this|it)?"
+                           r"\s*(?:changes?|work|it|them)?\s*[.!]*$", re.I)
+WORK_DISCARD_RE = re.compile(_JARVIS + r"(?:discard|scrap|throw\s+away|bin|revert)\s+(?:the\s+|those\s+|these\s+|your\s+|all\s+)?(?:changes?|work)\b", re.I)
+WORK_TRY_RE = re.compile(_JARVIS + r"(?:let\s+me\s+)?(?:try|test\s+drive|preview|show\s+me)\s+(?:it|the\s+changes?|them|that)\s*[.!]*$", re.I)
+WORK_NEW_RE = re.compile(_JARVIS + r"(?:new|fresh|start\s+a\s+new)\s+(?:work\s+)?(?:session|conversation|chat)\b", re.I)
 BUILD_STATUS_RE = re.compile(r"\b(?:how(?:'s|\s+is)\s+the\s+(?:build|upgrade)|(?:build|upgrade)\s+status|"
                              r"is\s+the\s+(?:build|upgrade)\s+(?:done|ready|finished))\b", re.I)
 MEMORY_RECALL_RE = re.compile(r"\bwhat\s+(?:do|did)\s+you\s+(?:know|remember|recall)\s+about\s+me\b|"
@@ -687,13 +704,43 @@ ROUTE_LOCAL_RE = re.compile(r"\b(open|launch|start up|fire up|pull up|bring up)\
 REQUEST = threading.local()
 
 
+class History(deque):
+    """The short-term chat history (the last few exchanges, verbatim). Every exchange added is also written
+    to the conversation log, and one that scrolls out is folded into the running summary, not lost."""
+
+    def __init__(self, maxlen, convo):
+        super().__init__(maxlen=maxlen)
+        self.convo = convo
+
+    def append(self, item):
+        if getattr(REQUEST, "probe", False):              # preflight's probes are never remembered
+            return super().append(item)
+        dropped = self[0] if len(self) == self.maxlen else None
+        super().append(item)
+        try:
+            self.convo.record(*item)
+            if dropped:
+                self.convo.scrolled_out(*dropped)
+        except Exception as e:
+            print(f"conversation log: {e}", file=sys.stderr)
+
+    def restore(self, items):
+        for item in items:
+            super().append(item)
+
+
 class Brain:
     def __init__(self, config):
         self.config = config
         self.claude = find_claude()
         self.index = Index()
-        self.history = deque(maxlen=HISTORY_TURNS)
-        self.lock = threading.Lock()
+        # Conversation memory: the full log, the running summary, recall (conversation.py).
+        self.convo = conversation.Conversation(os.path.join(HOME, "data", "history"),
+                                               lambda prompt, sp: self.ask_claude(prompt, system_prompt=sp)[0],
+                                               keep=HISTORY_TURNS)
+        self.history = History(HISTORY_TURNS, self.convo)
+        self.history.restore(self.convo.recent())        # a restart picks the thread back up
+        self.lock = threading.RLock()                    # re-entrant: prompts are built under it and recall() takes it too
         # Brains. Held in memory only, so a restart always comes back to config.json's model.
         model = config.get("model")
         self.default_flag = model if model and model != "claude-code-default" else None
@@ -727,14 +774,18 @@ class Brain:
         # What he learns about you from conversations, and building himself (both git-ignored data/ state).
         self.memory = memory.Memory(os.path.join(data_dir, "memory.json"),
                                     lambda prompt, sp: self.ask_claude(prompt, system_prompt=sp)[0])
-        self.toolchat.context = self.memory.context
+        self.toolchat.context = self.recall
         source = config.get("source_dir")
         source = None if is_todo(source) else source
         if not source and not getattr(sys, "frozen", False) and os.path.exists(os.path.join(ROOT, ".git")):
             source = ROOT                                 # the web version runs straight from its code folder
         if os.environ.get("JARVIS_SELF_BUILD") == "0":    # a self-build's own test server
             source = None
-        self.builder = selfbuild.Builder(source, HOME, self.cards, self.run_agent)
+        self.builder = selfbuild.Builder(source, HOME, self.cards, self.run_agent, context=self.build_context)
+        self.app = appupdate.AppUpdater(source, self.cards)
+        # Work mode: Jarvis as a Claude Code session you talk to (agent.py).
+        self.work = agent.Workbench(source, HOME, self.cards, self.run_agent, context=self.work_context,
+                                    workspace=lambda: self.hands.roots(), on_turn=self.work_turn_done)
         if self.default_flag is None:
             threading.Thread(target=self.learn_default, daemon=True).start()
 
@@ -872,6 +923,19 @@ class Brain:
     def own_commands(self, text):
         """Memory and self-build commands, said or typed at the desk. Returns {"route", "say", ...} or None."""
         t = text.strip()
+        if WORK_ON_RE.match(t):
+            return {"route": "work", "work": True, "say": "Very good, sir. Work mode: I'm all yours. "
+                    "Tell me what we're doing; say \"leave work mode\" when we're done."}
+        if APP_INSTALL_RE.match(t):
+            return {"route": "app", **self.install_app()}
+        if APP_UPDATE_RE.match(t):
+            self.log_activity("you asked me to update the desktop app")
+            return {"route": "app", "say": self.app.start()}
+        if BUILD_UNDO_RE.match(t):
+            r = self.builder.undo()
+            if r["ok"]:
+                self.log_activity("you undid a self-build")
+            return {"route": "build", **r}
         if BUILD_APPLY_RE.match(t):
             r = self.builder.apply()
             if r["ok"]:
@@ -883,6 +947,9 @@ class Brain:
             return {"route": "build", "say": self.builder.revise(t), "build": self.builder.status()}
         if BUILD_STATUS_RE.search(t):
             return {"route": "build", "say": self.build_status_line(), "build": self.builder.status()}
+        if self.builder.awaiting_answer() and t:
+            # He just asked you something about the build: what you say next is the answer.
+            return {"route": "build", "say": self.builder.answer(t), "build": self.builder.status()}
         if BUILD_START_RE.match(t):
             self.log_activity(f"you asked me to build: {t}")
             return {"route": "build", "say": self.builder.start(t), "build": self.builder.status()}
@@ -904,14 +971,81 @@ class Brain:
                     else "I don't have anything like that on file, sir. Settings, under Memory, has the full list."}
         return None
 
+    def waiting_cards(self):
+        """Cards still waiting for your decision (a finished build, a build question, an app update ready to
+        install): shown again whenever a desk page opens, not just the first time, quietly."""
+        out, build, app = [], self.builder.status(), self.app.status()
+        for c in reversed(self.cards.recent(7 * 24 * 3600)):
+            ref = c.get("ref") or {}
+            if c["kind"] == "build" and not any(x["kind"] == "build" for x in out) and build.get("status") in ("ready", "question") \
+                    and (ref.get("build") or {}).get("id") == build.get("id") \
+                    and (ref.get("build") or {}).get("status") == build.get("status"):
+                out.append({**c, "quiet": True})
+            if c["kind"] == "app" and not any(x["kind"] == "app" for x in out) and app.get("status") == "ready" \
+                    and (ref.get("app") or {}).get("status") == "ready":
+                out.append({**c, "quiet": True})
+        return out[::-1]
+
+    def work_message(self, text):
+        """A message in work mode: the few things Jarvis handles himself, everything else to the session."""
+        t = text.strip()
+        w = self.work
+        if WORK_OFF_RE.match(t):
+            return {"ok": True, "work": False, "say": "Very good, sir. Back to normal. The workbench keeps where we got to."}
+        if WORK_APPLY_RE.match(t) and w.state.get("pending"):
+            return {"ok": True, "say": w.apply()}
+        if WORK_DISCARD_RE.match(t):
+            return {"ok": True, "say": w.discard()}
+        if WORK_TRY_RE.match(t):
+            return self.work_preview()
+        if WORK_NEW_RE.match(t):
+            return {"ok": True, "say": w.new_session()}
+        if BUILD_UNDO_RE.match(t):
+            return self.builder.undo()
+        if APP_UPDATE_RE.match(t) or APP_INSTALL_RE.match(t):
+            return {"ok": True, **({"say": self.app.start()} if APP_UPDATE_RE.match(t) else self.install_app())}
+        return {**w.send(t), "sent": True}
+
+    def work_preview(self):
+        r = self.work.preview()
+        if r.get("ok"):
+            try:
+                self.hands.open_url(r["url"], new_window=True)
+            except localhand.HandError as e:
+                r["say"] = f"It's running at {r['url']}, sir, but I couldn't open it: {e}"
+        return r
+
+    def install_app(self):
+        """Install the built app update. From the desktop app, Jarvis closes himself so the installer can run."""
+        r = self.app.install()
+        if r.get("shutdown"):
+            self.log_activity("you installed an app update")
+            threading.Timer(6.0, Handler.httpd.shutdown).start()   # after the reply is spoken
+        return r
+
+    def build_context(self):
+        """What a new self-build is told about the conversation and about you (the request itself comes after)."""
+        with self.lock:
+            recent = list(self.history)[-6:]
+        parts = []
+        if recent:
+            parts.append("RECENT CONVERSATION WITH THE OWNER (context for the request):\n"
+                         + "\n".join(f"Owner: {q}\nJarvis: {a[:600]}" for q, a in recent))
+        known = self.memory.context("")
+        if known:
+            parts.append(known)
+        return "\n\n".join(parts)
+
     def build_status_line(self):
         s = self.builder.status()
         st = s.get("status")
         if st == "running":
             mins = max(1, round((time.time() - s["started"]) / 60))
             return f"Still on it, sir: {s.get('stage', 'working')}, {mins} minute{'s' if mins != 1 else ''} in."
+        if st == "question":
+            return f"I'm waiting for your answer, sir: {s.get('question')}"
         if st == "ready":
-            return "It's finished and passed its checks, sir. The card has the details: apply it or discard it."
+            return "It's finished and passed its checks, sir. The card has the details: try it, then apply or discard it."
         if st == "failed":
             return f"The last build failed, sir: {s.get('error') or 'see its card'}"
         if st == "applied":
@@ -965,7 +1099,7 @@ class Brain:
                 else:
                     quiet = True
                     self.standing.note_held()
-            c["quiet"] = quiet
+            c["quiet"] = quiet or bool(c.get("quiet"))   # a re-shown waiting card stays quiet
         return cards
 
     def desk_loop(self):
@@ -995,6 +1129,8 @@ class Brain:
             result = self.toolchat.run(t)
             self.tool_turn = time.time()
             self.log_activity(f"you asked me about your mail, calendar or files: {t}")
+            with self.lock:
+                self.history.append((t, result["answer"]))
             self.observe(t, result["answer"])
             receipts = [f"{ {'gmail_draft': 'Draft saved', 'gcal_add': 'Event added', 'gcal_move': 'Event moved'}.get(r['tool'], r['tool'])}: "
                         f"{r.get('link') or r['id']}" for r in result["receipts"]
@@ -1013,13 +1149,40 @@ class Brain:
             pass                                          # the first real answer will teach it instead
 
     def reset(self):
+        """"New conversation": the short-term history is folded into the running summary, then cleared."""
         with self.lock:
+            if not getattr(REQUEST, "probe", False):
+                for q, a in self.history:
+                    self.convo.scrolled_out(q, a)
+                self.convo.flush()
             self.history.clear()
         self.toolchat.reset()
 
+    def recall(self, question):
+        """Everything remembered that bears on a question: facts about the user (memory.py), the running
+        summary of earlier conversation, and the most relevant past exchanges (conversation.py)."""
+        with self.lock:
+            current = list(self.history)
+        return "\n\n".join(x for x in (self.memory.context(question), self.convo.context(question, current)) if x)
+
+    def work_context(self):
+        """What a new work-mode session starts with (the rest it finds in its own notes and the log)."""
+        with self.lock:
+            recent = list(self.history)
+        parts = [self.recall(" ".join(q for q, _ in recent[-3:]))]
+        if recent:
+            parts.append("THE LAST FEW EXCHANGES AT THE DESK:\n" + "\n".join(f"Owner: {q}\nJarvis: {a[:600]}" for q, a in recent))
+        return "\n\n".join(p for p in parts if p)
+
+    def work_turn_done(self, question, answer):
+        """A work-mode turn joins the same conversation: the history, the log, and memory's learning."""
+        with self.lock:
+            self.history.append((question, agent.first_paragraph(answer) or answer[:600]))
+        self.observe(question, answer[:3000])
+
     def build_prompt(self, question, ids, small_talk=False):
         parts = []
-        known = self.memory.context(question)
+        known = self.recall(question)
         if known:
             parts += [known, ""]
         if self.history:
@@ -1092,29 +1255,67 @@ class Brain:
             error = (proc.stderr or proc.stdout or "no output").strip()[-500:]
         return answer, error, used
 
-    def run_agent(self, prompt, cwd, system_append, timeout):
-        """Self-build: one Claude Code run in a throwaway copy of the code, with file tools only (no shell,
-        web or connectors), edits accepted inside that folder. Returns (final text, error or None)."""
-        cmd = [self.claude, "-p", "--tools", "Read,Edit,Write,Glob,Grep", "--permission-mode", "acceptEdits",
-               "--no-session-persistence", "--strict-mcp-config", "--append-system-prompt", system_append,
+    def run_agent(self, prompt, cwd, system_append, timeout, session=None, resume=False, env=None, deny=(),
+                  on_start=None, on_event=None, add_dirs=()):
+        """Self-build and work mode: one Claude Code run, with every built-in tool (shell, files, web,
+        sub-agents) pre-approved, minus the deny rules, and no connectors (no mail or calendar).
+        session: the conversation id (resume=True continues it, so it remembers everything said before).
+        on_event(event): each stream-json event as it happens (live activity on the desk).
+        Returns (final text, error or None, activity: [[tool, detail]...])."""
+        cmd = [self.claude, "-p", "--permission-mode", "bypassPermissions", "--strict-mcp-config",
+               "--append-system-prompt", system_append, "--effort", "high",
                "--output-format", "stream-json", "--verbose"]
+        if session:
+            cmd += ["--resume", session] if resume else ["--session-id", session]
+        if add_dirs:
+            cmd += ["--add-dir", *add_dirs]
+        if deny:
+            cmd += ["--disallowedTools", *deny]
         with self.lock:
             if self.model_flag:
                 cmd += ["--model", self.model_flag]
-        env = os.environ.copy()
+        run_env = os.environ.copy()
         if self.config.get("auth_type") == "subscription_bridge":
             for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-                env.pop(var, None)
-        env.pop("CLAUDECODE", None)
+                run_env.pop(var, None)
+        run_env.pop("CLAUDECODE", None)
+        run_env.update(env or {})
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", env=run_env, cwd=cwd,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if on_start:
+            on_start(proc)
+        # Read the stream line by line (so on_event sees it live); stderr drains on its own thread.
+        timed_out, lines, err = [], [], []
+        drain = threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True)
+        drain.start()
+        watchdog = threading.Timer(timeout, lambda: (timed_out.append(1), subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)))
+        watchdog.start()
         try:
-            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                  env=env, cwd=cwd, timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired:
-            return "", f"it took longer than {timeout // 60} minutes"
-        answer, error, _ = stream_result(proc.stdout)
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except OSError:
+            pass
+        for line in proc.stdout:
+            lines.append(line)
+            if on_event:
+                try:
+                    on_event(json.loads(line))
+                except ValueError:
+                    pass
+                except Exception as e:                    # a broken listener never breaks the run
+                    print(f"agent event: {e}", file=sys.stderr)
+        proc.wait()
+        watchdog.cancel()
+        drain.join(5)
+        stdout, stderr = "".join(lines), "".join(err)
+        if timed_out:
+            return "", f"it took longer than {timeout // 60} minutes", selfbuild.parse_activity(stdout)
+        answer, error, _ = stream_result(stdout)
         if not error and (proc.returncode != 0 or not answer):
-            error = (proc.stderr or proc.stdout or "no output").strip()[-500:]
-        return answer, error
+            error = (stderr or stdout or "no output").strip()[-500:]
+        return answer, error, selfbuild.parse_activity(stdout)
 
     def observe(self, question, answer):
         """A finished conversational turn: memory may learn from it (in the background)."""
@@ -1260,7 +1461,7 @@ class Brain:
         blocks, names = attachment_blocks(files)
         with self.lock:
             past = "\n".join(f"Q: {q}\nA: {a}" for q, a in list(self.history)[-3:])
-        known = self.memory.context(question)
+        known = self.recall(question)
         prompt = ((known + "\n\n" if known else "") + (f"EARLIER IN THIS CONVERSATION:\n{past}\n\n" if past else "")
                   + f"QUESTION: {question}")
         answer, model = self.ask_claude(prompt, system_prompt=ATTACH_SYSTEM_PROMPT, blocks=blocks)
@@ -1547,9 +1748,12 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 after = -1
             cards = b.cards.for_desk(after) if after >= 0 else b.cards.catch_up(CATCH_UP_SECONDS)
+            if after < 0:
+                cards += [c for c in b.waiting_cards() if c["id"] not in {x["id"] for x in cards}]
             return self.send_json(200, {"cards": b.announce(cards), "latest": b.cards.latest(),
                                         "standing": b.standing.status(),
-                                        "reminders": b.reminders.pending(), "build": b.builder.brief()})
+                                        "reminders": b.reminders.pending(), "build": b.builder.brief(),
+                                        "app": {k: b.app.status().get(k) for k in ("status", "version", "started")}})
         if self.path.split("?")[0] == "/models":
             # The brain menu: every catalog model with what's known about it. The first request starts a
             # one-off live check in the background (one tiny call per model), as a spoken switch would.
@@ -1565,6 +1769,25 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(200, self.brain.memory.state())
         if route == "/build":
             return self.send_json(200, self.brain.builder.status())
+        if route == "/agent":                             # work mode: live activity, the last answer, pending changes
+            params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                after = int((params.get("after") or ["0"])[0])
+            except ValueError:
+                after = 0
+            return self.send_json(200, self.brain.work.view(after))
+        if route.startswith("/build/shot/"):              # before/after screenshots on a build card
+            path = self.brain.builder.shot_path(route.rsplit("/", 1)[1])
+            if not path:
+                return self.send_json(404, {"error": "not found"})
+            with open(path, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(body)
         if self.path.split("?")[0] == "/model":
             b = self.brain
             return self.send_json(200, {"model": b.model_info(), "default": b.model_info(b.default_id),
@@ -1584,7 +1807,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route == "/attach":
             return self.handle_attach()
         if route not in ("/chat", "/remember", "/model", "/tool_chat", "/google/disconnect", "/open_browser_tab",
-                         "/remind", "/route", "/shutdown", "/memory", "/build"):
+                         "/remind", "/route", "/shutdown", "/memory", "/build", "/app", "/agent"):
             return self.send_json(404, {"error": "not found"})
         try:
             length = int(self.headers["Content-Length"])         # checked by the gate: digits, within the cap
@@ -1634,7 +1857,52 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, r)
             if op == "discard":
                 return self.send_json(200, {"ok": True, "say": builder.discard()})
-            return self.send_json(400, {"error": "op must be apply or discard"})
+            if op == "preview":                           # Try it: the changed Jarvis, live, on a spare port
+                r = builder.preview()
+                if r["ok"]:                               # in your real Chrome: the desk window closes popups
+                    try:
+                        self.brain.hands.open_url(r["url"], new_window=True)
+                    except localhand.HandError as e:
+                        r["say"] = f"It's running at {r['url']}, sir, but I couldn't open it: {e}"
+                return self.send_json(200, r)
+            if op == "answer":                            # the answer box on a question card
+                text = str(data.get("text", "")).strip()[:4000]
+                if not text:
+                    return self.send_json(400, {"ok": False, "say": "Type an answer first, sir."})
+                return self.send_json(200, {"ok": True, "say": builder.answer(text)})
+            if op == "undo":
+                r = builder.undo()
+                if r["ok"]:
+                    self.brain.log_activity("you undid a self-build")
+                return self.send_json(200, r)
+            return self.send_json(400, {"error": "op must be apply, discard, preview, answer or undo"})
+        if route == "/agent":
+            # Work mode: a message, or the buttons (Stop, Try it, Apply, Discard, New session).
+            op, w = data.get("op", "send"), self.brain.work
+            if op == "send":
+                text = str(data.get("text", "")).strip()[:selfbuild.MAX_REQUEST]
+                if not text:
+                    return self.send_json(400, {"ok": False, "say": "Say or type something first, sir."})
+                return self.send_json(200, self.brain.work_message(text))
+            if op == "stop":
+                return self.send_json(200, {"ok": True, "say": w.stop()})
+            if op == "apply":
+                return self.send_json(200, {"ok": True, "say": w.apply()})
+            if op == "discard":
+                return self.send_json(200, {"ok": True, "say": w.discard()})
+            if op == "preview":
+                return self.send_json(200, self.brain.work_preview())
+            if op == "new":
+                return self.send_json(200, {"ok": True, "say": w.new_session()})
+            return self.send_json(400, {"error": "op must be send, stop, apply, discard, preview or new"})
+        if route == "/app":
+            # The desktop app update card: build a new installer, or install the one that's ready.
+            op = data.get("op")
+            if op == "update":
+                return self.send_json(200, {"ok": True, "say": self.brain.app.start()})
+            if op == "install":
+                return self.send_json(200, self.brain.install_app())
+            return self.send_json(400, {"error": "op must be update or install"})
         if route == "/route":
             text = str(data.get("text", ""))[:2000]
             routed = self.brain.route_text(text)
@@ -1675,6 +1943,8 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 result = self.brain.toolchat.run(question)
                 self.brain.log_activity(f"you asked me about your mail or calendar: {question}")
+                with self.brain.lock:
+                    self.brain.history.append((question, result["answer"]))
                 self.brain.observe(question, result["answer"])
                 return self.send_json(200, {**result, "model": self.brain.model_info()})
             except subprocess.TimeoutExpired:

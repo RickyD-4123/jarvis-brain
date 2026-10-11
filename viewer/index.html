@@ -349,6 +349,34 @@
     background: transparent; color: var(--text); }
   .build-actions button.apply { background: var(--accent, #6cf); color: #0b0d12; border-color: transparent; font-weight: 600; }
   .build-actions button:disabled { opacity: .5; cursor: default; }
+  .build-answer { flex-wrap: wrap; }
+  .build-answer textarea { flex: 1 1 100%; font: inherit; font-size: 13px; color: var(--text); background: rgba(255,255,255,.06);
+    border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; resize: vertical; }
+  .build-shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .build-shots figure { margin: 0; }
+  .build-shots img { width: 100%; display: block; border-radius: 8px; border: 1px solid var(--border); }
+  .build-shots figcaption { font-size: 11px; color: var(--muted); margin-top: 4px; text-align: center; letter-spacing: .08em; text-transform: uppercase; }
+  .build-activity { margin: 6px 0 0; padding-left: 16px; font-size: 11.5px; max-height: 260px; overflow: auto; }
+  .build-activity li { overflow-wrap: anywhere; margin: 2px 0; font-family: ui-monospace, Consolas, monospace; }
+  .build-activity b { font-family: inherit; color: var(--accent); font-weight: 600; margin-right: 4px; }
+  /* Work mode: the Work button lit, live steps in the turn, and the workbench bar above the message box */
+  #work[aria-pressed="true"] { color: #04121f; background: var(--accent); border-color: transparent; }
+  body.working #ask { box-shadow: 0 0 0 1px var(--accent), 0 0 18px rgba(124,196,255,.25); }
+  .work-steps { margin-top: 8px; font-size: 12px; }
+  .work-steps summary { cursor: pointer; color: var(--muted); }
+  .work-steps ol { margin: 6px 0 0; padding-left: 20px; max-height: 240px; overflow: auto; }
+  .work-steps li { margin: 2px 0; color: var(--muted); overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; }
+  .work-steps li.say { color: var(--text); font-family: inherit; }
+  .work-steps li.bad { color: #ff8b8b; }
+  .work-steps li.you { color: var(--accent); font-family: inherit; }
+  #workbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; padding: 8px 12px; border-radius: 14px;
+    font-size: 12.5px; background: var(--panel); border: 1px solid var(--border); backdrop-filter: blur(10px); }
+  #workbar[hidden] { display: none; }
+  #workbar .grow { flex: 1; min-width: 160px; color: var(--muted); }
+  #workbar button { font: inherit; font-size: 12.5px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text); }
+  #workbar button.apply { background: var(--accent); color: #04121f; border-color: transparent; font-weight: 600; }
+  #workbar button:disabled { opacity: .5; cursor: default; }
 
   @media (max-width: 1180px) {
     :root { --avw: clamp(240px, 30vw, 320px); }
@@ -466,6 +494,7 @@
   </button>
   <div id="answer" role="log" aria-live="polite"></div>
   <div id="attached" aria-label="Attached files"></div>
+  <div id="workbar" hidden aria-live="polite"></div>
   <form id="ask">
     <button type="button" class="tool" id="attach" title="Attach files from your computer" aria-label="Attach files">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -479,6 +508,8 @@
     <button type="button" class="tool clear empty" id="clear" title="Clear this message (or say “scratch that”)" aria-label="Clear message">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="M17.5 9.5l-5 5M12.5 9.5l5 5"/></svg>
     </button>
+    <button type="button" class="ghost" id="work" aria-pressed="false"
+            title="Work mode: talk to me the way you'd use Claude Code (or say “let's work”)">Work</button>
     <button type="button" class="ghost" id="reset" title="Start a new conversation">New</button>
     <button type="submit" id="send">Ask</button>
   </form>
@@ -962,6 +993,7 @@
     clearBuffer();
     stopSpeaking();
     if (inflight) { inflight.abort(); inflight = null; send.disabled = false; setAnswer(lastQuestion, "Stopped."); }
+    if (workBusy) workPost({ op: "stop" }).then(workPoll);   // stops his work-mode turn too
     restStatus(`heard “${word}”`);
   }
 
@@ -1049,7 +1081,7 @@
   }
   // Sixty seconds with no speech, typing or sound from you: he says so, dims, and waits for a wake phrase.
   setInterval(() => {
-    if (!asleep && mode !== "thinking" && mode !== "speaking" && !inflight && Date.now() - lastActivity > SLEEP_MS) goToSleep(true);
+    if (!asleep && mode !== "thinking" && mode !== "speaking" && !inflight && !workBusy && Date.now() - lastActivity > SLEEP_MS) goToSleep(true);
   }, 1000);
 
   function setMic(on) {
@@ -1559,6 +1591,7 @@
       setFilter(d.standing);
       lastReminders = d.reminders || [];
       lastBuild = d.build || null;
+      lastApp = d.app || null;
       // On first load, cards missed while the page was closed arrive too (the server catches them up).
       for (const c of d.cards || []) {
         const receipts = ((c.ref && c.ref.receipts) || []).map(r => safeUrl(r.link)
@@ -1569,10 +1602,11 @@
         const built = c.kind === "briefing" && c.ref && c.ref.built_from
           ? `<details><summary>Built from</summary><pre>${esc(c.ref.built_from)}</pre></details>` : "";
         if (c.kind === "build") setAnswer(c.title, buildCardHtml(c), "", c.ref && c.ref.build && c.ref.build.status === "failed");
+        else if (c.kind === "app") setAnswer(c.title, appCardHtml(c), "", c.ref && c.ref.app && c.ref.app.status === "failed");
         else setAnswer(c.title, esc(c.text) + built, receipts || (c.priority === "high" ? "Urgent" : ""), false);
         if (c.quiet) continue;                         // standing order: shown, not announced
-        if (c.kind === "reminder" || c.kind === "briefing" || c.kind === "build") {
-          flashDesk({ reminder: "⏰ Reminder", briefing: "Briefing", build: "Self-build" }[c.kind]); chime();
+        if (["reminder", "briefing", "build", "app"].includes(c.kind)) {
+          flashDesk({ reminder: "⏰ Reminder", briefing: "Briefing", build: "Self-build", app: "App update" }[c.kind]); chime();
         }
         speak(c.kind === "reminder" ? `Reminder: ${c.text}` : c.text, c.kind === "briefing" ? Infinity : undefined);
       }
@@ -1587,39 +1621,188 @@
     return /^\+(?!\+\+ )/.test(l) ? `<span class="add">${e}</span>` : /^-(?!-- )/.test(l) ? `<span class="del">${e}</span>`
          : l.startsWith("@@") ? `<span class="hunk">${e}</span>` : e;
   }).join("\n");
+  const actionBtn = (op, label, cls = "") => `<button type="button" data-op="${op}" class="${cls}">${label}</button>`;
   function buildCardHtml(c) {
     const b = (c.ref && c.ref.build) || {};
+    const id = esc(b.id);
+    if (c.title === "Self-build question") {          // he asked before building: answer here or by voice
+      return esc(c.text) + `<div class="build-actions build-answer" data-build="${id}">`
+        + '<textarea rows="2" placeholder="Your answer (or just say it)" aria-label="Your answer"></textarea>'
+        + actionBtn("answer", "Answer", "apply") + actionBtn("discard", "Cancel build") + "</div>";
+    }
     const verbs = { A: "added", M: "changed", D: "deleted" };
     const files = (b.files || []).map(([st, p]) => `<li>${esc(verbs[st] || st)} <code>${esc(p)}</code></li>`).join("");
     const checks = (b.checks || []).map(([name, ok]) => `<li class="${ok ? "ok" : "bad"}">${esc(name)}</li>`).join("");
     const failed = (b.checks || []).filter(([, ok]) => !ok)
       .map(([name, , detail]) => `<details><summary>Why “${esc(name)}” failed</summary><pre>${esc(detail)}</pre></details>`).join("");
-    const warn = (b.protected || []).length ? `<div class="build-warn">This changes my safety code (${b.protected.map(esc).join(", ")}). `
-      + "Read the changes before you apply it.</div>" : "";
+    const warn = ((b.protected || []).length ? `<div class="build-warn">This changes my safety code (${b.protected.map(esc).join(", ")}). `
+      + "Read the changes before you apply it.</div>" : "")
+      + (b.source_changed ? '<div class="build-warn">My real code folder changed while I was building (the build itself only '
+      + "works on a copy). If that wasn't you, check it before applying.</div>" : "");
+    const shots = (b.shots || []).length ? '<div class="build-shots">' + b.shots.map(s =>
+      `<figure><a href="/build/shot/${id}-${s}.png" target="_blank" rel="noopener"><img src="/build/shot/${id}-${s}.png" alt="${s}"></a>`
+      + `<figcaption>${s === "before" ? "Before" : "After"}</figcaption></figure>`).join("") + "</div>" : "";
+    const act = b.activity || [];
+    const web = act.filter(([t]) => t === "WebFetch" || t === "WebSearch").length;
+    const ran = act.filter(([t]) => t === "Bash").length;
+    const activity = act.length ? `<details class="build-diff"><summary>What the builder did: ${ran} command${ran === 1 ? "" : "s"}`
+      + (web ? `, ${web} web lookup${web === 1 ? "" : "s"}` : "") + `, ${act.length - ran - web} other</summary><ul class="build-activity">`
+      + act.map(([t, d]) => `<li><b>${esc(t)}</b> ${esc(d)}</li>`).join("") + "</ul></details>" : "";
     const diff = b.diff ? `<details class="build-diff"><summary>Show the changes</summary><pre>${colourDiff(b.diff)}</pre>`
       + (b.diff_truncated ? '<p class="note">(long diff: shortened here)</p>' : "") + "</details>" : "";
-    const actions = b.status === "ready" ? `<div class="build-actions" data-build="${esc(b.id)}">`
-      + '<button type="button" class="apply">Apply</button><button type="button" class="discard">Discard</button></div>' : "";
-    return esc(c.text) + warn + (files ? `<ul class="build-files">${files}</ul>` : "")
-      + (checks ? `<ul class="build-checks">${checks}</ul>` : "") + failed + diff + actions;
+    const actions = b.status === "ready" ? `<div class="build-actions" data-build="${id}">` + actionBtn("preview", "Try it")
+      + actionBtn("apply", "Apply", "apply") + actionBtn("discard", "Discard") + "</div>" : "";
+    return esc(c.text) + warn + shots + (files ? `<ul class="build-files">${files}</ul>` : "")
+      + (checks ? `<ul class="build-checks">${checks}</ul>` : "") + failed + activity + diff + actions;
   }
+  function appCardHtml(c) {
+    const a = (c.ref && c.ref.app) || {};
+    return esc(c.text) + (a.status === "ready" ? '<div class="build-actions" data-app="1">' + actionBtn("install", "Install", "apply") + "</div>" : "");
+  }
+  // Every button on a build or app card: Try it, Apply, Discard, Answer, Undo, Install.
+  const OP_TITLES = { apply: "Apply the build", discard: "Discard the build", preview: "Try the build", answer: "Answer",
+                      undo: "Undo the build", install: "Install the app update" };
   box.addEventListener("click", async e => {
-    const btn = e.target.closest(".build-actions button");
+    const btn = e.target.closest(".build-actions button[data-op]");
     if (!btn) return;
-    const wrap = btn.parentElement, op = btn.classList.contains("apply") ? "apply" : "discard";
+    const wrap = btn.parentElement, op = btn.dataset.op;
+    const body = op === "install" || op === "undo" ? { op } : { op, id: wrap.dataset.build };
+    if (op === "answer") {
+      body.text = (wrap.querySelector("textarea") || {}).value || "";
+      if (!body.text.trim()) return;
+    }
     wrap.querySelectorAll("button").forEach(b => { b.disabled = true; });
     let d;
     try {
-      d = await (await fetch("/build", { method: "POST", headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ op, id: wrap.dataset.build }) })).json();
+      d = await (await fetch(op === "install" ? "/app" : "/build", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                                     body: JSON.stringify(body) })).json();
     } catch (err) { d = { ok: false, say: "I couldn't reach the build: " + err.message }; }
-    if (d.ok || d.stale) wrap.remove();               // done (or the card is out of date): no more buttons
+    const keep = op === "preview" && d.ok;            // Try it leaves Apply / Discard in place
+    if (!keep && (d.ok || d.stale)) wrap.remove();    // done (or the card is out of date): no more buttons
     else wrap.querySelectorAll("button").forEach(b => { b.disabled = false; });
     const say = d.say || d.error || "Done.";
-    setAnswer(op === "apply" ? "Apply the build" : "Discard the build", esc(say), "", d.ok === false);
+    const undo = op === "apply" && d.ok ? '<div class="build-actions">' + actionBtn("undo", "Undo") + "</div>" : "";
+    setAnswer(OP_TITLES[op] || op, esc(say) + undo, "", d.ok === false);
     speak(say, Infinity);
     if (d.reload) setTimeout(() => location.reload(), 4500);
   });
+
+  // ---------------------------------------------------------------- work mode
+  // "Let's work" (or the Work button): every message continues one Claude Code session on the server
+  // (agent.py). While he works, his steps stream into the turn; the answer's first paragraph is spoken.
+  // The bar above the message box shows changes waiting in his workbench: Try it / Apply / Discard.
+  const workBtn = document.getElementById("work"), workbar = document.getElementById("workbar");
+  let workMode = false, workBusy = false, workAfter = 0, workLastN = -1, workTurn = null, workTimer = null;
+  try { workMode = sessionStorage.getItem("jarvis.work") === "1"; } catch (_) {}
+  async function workPost(body) {
+    try {
+      const res = await fetch("/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return await res.json();
+    } catch (err) { return { ok: false, say: "I couldn't reach my workbench: " + err.message }; }
+  }
+  function setWork(on) {
+    workMode = on;
+    try { sessionStorage.setItem("jarvis.work", on ? "1" : "0"); } catch (_) {}
+    workBtn.setAttribute("aria-pressed", String(on));
+    document.body.classList.toggle("working", on);
+    input.placeholder = on ? "What are we working on?" : "What can I do for you today?";
+    workPoll();
+  }
+  workBtn.onclick = () => {
+    setWork(!workMode);
+    const say = workMode ? "Work mode, sir. Talk to me as you would in Claude Code." : "Back to normal, sir.";
+    setAnswer(workMode ? "Work mode" : "Leave work mode", esc(say));
+    speak(say);
+  };
+  async function workSend(q) {
+    stopSpeaking(); clearBuffer(); input.value = "";
+    touch();
+    const d = await workPost({ op: "send", text: q });
+    if (d.work === false) setWork(false);
+    if (d.sent && d.ok && !d.queued) {                 // a turn started: a live entry that fills in as he works
+      setAnswer(q, '<span class="dots">Working</span><details class="work-steps" open><summary>Steps</summary><ol></ol></details>');
+      workTurn = current;
+      workBusy = true;
+      setStatus("thinking", "working");
+    } else {
+      const say = d.say || d.error || "Done.";
+      setAnswer(q, esc(say), "", d.ok === false);
+      speak(say, Infinity);
+      if (d.reload) setTimeout(() => location.reload(), 4500);
+    }
+    workPoll();
+  }
+  function workStep(e) {
+    const ol = workTurn && workTurn.isConnected && workTurn.querySelector(".work-steps ol");
+    if (!ol || e.kind === "done") return;
+    const li = document.createElement("li");
+    li.className = { text: "say", you: "you", queued: "you", check: e.ok === false ? "bad" : "" }[e.kind] || "";
+    li.textContent = e.kind === "queued" ? "You (while I worked): " + e.text : e.kind === "you" ? "" : e.text;
+    if (!li.textContent) return;
+    ol.appendChild(li);
+    ol.scrollTop = ol.scrollHeight;
+    const s = workTurn.querySelector(".work-steps summary");
+    if (s) s.textContent = `Steps (${ol.children.length})`;
+    saveFeed();
+  }
+  function renderWorkbar(d) {
+    const files = d.pending || [];
+    workbar.hidden = !workMode || (!files.length && !d.applying && !d.queue);
+    if (workbar.hidden) return;
+    const busy = d.busy || d.applying;
+    workbar.innerHTML = `<span class="grow">${d.applying ? "Checking and applying…" : files.length
+      ? `${files.length} file${files.length === 1 ? "" : "s"} changed in my workbench: ${files.slice(0, 3).map(([, p]) => esc(p)).join(", ")}`
+        + (files.length > 3 ? "…" : "") : ""}${d.queue ? ` · ${d.queue} message${d.queue === 1 ? "" : "s"} queued` : ""}</span>`
+      + (files.length ? `<button type="button" data-wop="preview" ${busy ? "disabled" : ""}>Try it</button>`
+      + `<button type="button" data-wop="apply" class="apply" ${busy ? "disabled" : ""}>Apply</button>`
+      + `<button type="button" data-wop="discard" ${busy ? "disabled" : ""}>Discard</button>` : "");
+  }
+  workbar.addEventListener("click", async e => {
+    const btn = e.target.closest("button[data-wop]");
+    if (!btn) return;
+    workbar.querySelectorAll("button").forEach(b => { b.disabled = true; });
+    const d = await workPost({ op: btn.dataset.wop });
+    const say = d.say || d.error || "Done.";
+    setAnswer({ preview: "Try it", apply: "Apply the changes", discard: "Discard the changes" }[btn.dataset.wop], esc(say), "", d.ok === false);
+    speak(say, Infinity);
+    workPoll();
+  });
+  async function workPoll() {
+    clearTimeout(workTimer);
+    let d;
+    try { d = await (await fetch(`/agent?after=${workAfter}`)).json(); } catch { workTimer = setTimeout(workPoll, 4000); return; }
+    const first = workLastN < 0;
+    for (const e of d.events || []) {
+      workAfter = Math.max(workAfter, e.n);
+      if (!first) workStep(e);
+    }
+    if (first) {                                       // page just opened: don't replay old answers
+      workLastN = (d.last || {}).n || 0;
+      if (d.busy) { setAnswer("Still working", '<span class="dots">Working</span><details class="work-steps" open><summary>Steps</summary><ol></ol></details>'); workTurn = current; }
+    } else if (d.last && d.last.n > workLastN) {       // he finished (a turn, or an apply)
+      workLastN = d.last.n;
+      const html = esc(d.last.text || d.last.say || "Done.");
+      if (workTurn && workTurn.isConnected && workTurn.dataset.pending === "1") {
+        const a = workTurn.querySelector(".a"), steps = a.querySelector(".work-steps");
+        if (steps) steps.open = false;
+        a.innerHTML = html + (steps ? steps.outerHTML : "");
+        workTurn.dataset.pending = "0";
+        workTurn.classList.toggle("error", !!d.last.error);
+        saveFeed();
+      } else {
+        setAnswer("Jarvis", html, "", !!d.last.error);
+      }
+      workTurn = null;
+      speak(d.last.say || d.last.text, Infinity);
+      if (d.last.reload) setTimeout(() => location.reload(), 6000);
+    }
+    workBusy = !!(d.busy || d.applying);
+    if (workBusy) setStatus("thinking", d.applying ? "checking the changes" : "working");
+    else if (mode === "thinking" && !inflight) restStatus();
+    renderWorkbar(d);
+    workTimer = setTimeout(workPoll, workBusy ? 800 : workMode ? 3000 : 15000);
+  }
+  if (workMode) setWork(true); else workPoll();
 
   // The server stopped (the power button, or it shut itself down after the window was closed).
   let offline = false, pollFails = 0;
@@ -1659,7 +1842,7 @@
     let n = 0; const t = setInterval(() => { document.title = n++ % 2 ? baseTitle : label; if (n > 20) { clearInterval(t); document.title = baseTitle; } }, 800);
   }
   // The HUD: a clock above the reactor, and a systems panel under the brain badge.
-  let lastReminders = [], lastBuild = null;
+  let lastReminders = [], lastBuild = null, lastApp = null;
   function hudTick() {
     const now = new Date();
     document.getElementById("clock").textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -1671,9 +1854,11 @@
     document.getElementById("sysNotes").textContent = `${GRAPH.nodes.length} notes`;
     document.getElementById("sysRem").textContent = lastReminders.length ? `${lastReminders.length} pending` : "None";
     const building = lastBuild && lastBuild.status === "running";
-    document.getElementById("sysBuildRow").hidden = !building;
-    if (building) document.getElementById("sysBuild").textContent =
-      `${lastBuild.stage || "working"} · ${Math.max(1, Math.round((Date.now() / 1000 - lastBuild.started) / 60))} min`;
+    const appBuilding = lastApp && lastApp.status === "building";
+    const mins = t => Math.max(1, Math.round((Date.now() / 1000 - t) / 60));
+    document.getElementById("sysBuildRow").hidden = !building && !appBuilding;
+    if (building) document.getElementById("sysBuild").textContent = `${lastBuild.stage || "working"} · ${mins(lastBuild.started)} min`;
+    else if (appBuilding) document.getElementById("sysBuild").textContent = `app v${lastApp.version || "?"} · ${mins(lastApp.started)} min`;
     const next = lastReminders[0];
     document.getElementById("sysNext").textContent = next
       ? `${new Date(next.due * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${next.task}` : "Nothing scheduled";
@@ -1712,6 +1897,7 @@
 
   async function ask(q) {
     if (pendingFiles.length) return attach(q);
+    if (workMode) return workSend(q);                  // work mode: everything goes to the session
     let routed = null;
     try {
       routed = await (await fetch("/route", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1738,6 +1924,7 @@
       setAnswer(q, esc(routed.say), routed.route === "standing" ? "Urgent filter armed: only what can't wait reaches your phone" : "",
                 routed.ok === false);
       speak(routed.say, routed.route === "standing" ? undefined : Infinity);
+      if (routed.work) setWork(true);                  // "let's work"
       if (routed.reload) setTimeout(() => location.reload(), 4500);   // an applied self-build changed the page
       return;
     }
@@ -2048,6 +2235,7 @@
     stopSpeaking(); clearBuffer();
     if (inflight) { inflight.abort(); inflight = null; send.disabled = false; }
     await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) });
+    if (workMode) await workPost({ op: "new" });       // and a fresh work session (his notes and changes stay)
     if (box.children.length && !(box.lastElementChild || {}).classList?.contains("divider")) {
       const d = document.createElement("div"); d.className = "divider"; d.textContent = "New conversation";
       box.appendChild(d); current = null; scrollFeed(); saveFeed();
