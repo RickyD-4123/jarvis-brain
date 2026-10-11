@@ -186,17 +186,17 @@ class AppUpdater:
         with open(script, "w", encoding="utf-8") as f:
             f.write("$ErrorActionPreference = 'Continue'\n"
                     f"$log = {q(log)}\n"
-                    "\"$(Get-Date -Format s) waiting for Jarvis to close\" | Out-File $log -Append\n"
+                    "\"$(Get-Date -Format s) waiting for Jarvis to close\" | Out-File $log -Append -Encoding utf8\n"
                     "$deadline = (Get-Date).AddMinutes(3)\n"
                     "while ((Get-Process -Name 'Jarvis','jarvis-backend' -ErrorAction SilentlyContinue) -and "
                     "((Get-Date) -lt $deadline)) { Start-Sleep -Milliseconds 500 }\n"
                     "Get-Process -Name 'jarvis-backend' -ErrorAction SilentlyContinue | Stop-Process -Force\n"
                     f"$p = Start-Process -FilePath {q(s['installer'])} -ArgumentList '/S' -Wait -PassThru\n"
-                    "\"$(Get-Date -Format s) installer exit $($p.ExitCode)\" | Out-File $log -Append\n"
+                    "\"$(Get-Date -Format s) installer exit $($p.ExitCode)\" | Out-File $log -Append -Encoding utf8\n"
                     f"$exe = {q(exe)}\n"
                     "if (-not (Test-Path $exe)) { $exe = Join-Path $env:LOCALAPPDATA 'Programs\\Jarvis\\Jarvis.exe' }\n"
                     "Start-Process -FilePath $exe\n"
-                    "\"$(Get-Date -Format s) started $exe\" | Out-File $log -Append\n")
+                    "\"$(Get-Date -Format s) started $exe\" | Out-File $log -Append -Encoding utf8\n")
         self.launch(script)
         with self.lock:
             self.state["status"] = "installing"
