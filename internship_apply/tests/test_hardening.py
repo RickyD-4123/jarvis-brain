@@ -232,7 +232,10 @@ class LogTests(Base):
         self.assertIn("[redacted", text)
 
     def test_logs_live_in_the_logs_folder(self):
-        self.assertEqual(pathlib.Path(logmod.LOG_DIR), HERE.parent / "logs")
+        # Next to the code for the web version; under JARVIS_HOME when the desktop app runs (and its checks).
+        home = os.environ.get("JARVIS_HOME")
+        expected = pathlib.Path(home, "internship_apply", "logs") if home else HERE.parent / "logs"
+        self.assertEqual(pathlib.Path(logmod.LOG_DIR), expected)
         gitignore = (HERE.parent.parent / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("internship_apply/logs/", gitignore)
 

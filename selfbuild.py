@@ -550,10 +550,13 @@ class Builder:
         return out
 
     def _py(self, cwd, args, timeout, env=None):
+        # The desktop app's JARVIS_HOME is the owner's real data: checks get it only when given a scratch one,
+        # so unit tests see the code folder as home and never write logs or data into the real folder.
+        base = {k: v for k, v in os.environ.items() if k != "JARVIS_HOME"}
         try:
             p = subprocess.run([self.python, *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
                                errors="replace", timeout=timeout, creationflags=NO_WINDOW,
-                               env={**os.environ, "PYTHONIOENCODING": "utf-8", **(env or {})})
+                               env={**base, "PYTHONIOENCODING": "utf-8", **(env or {})})
             return p.returncode, (p.stdout + p.stderr)[-8000:]
         except subprocess.TimeoutExpired:
             return 1, f"timed out after {timeout} s"

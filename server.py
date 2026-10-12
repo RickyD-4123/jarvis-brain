@@ -759,8 +759,8 @@ class Brain:
         self.model_flag = self.default_flag
         self.default_id = self.default_flag              # Claude Code's own default is learned live
         self.catalog, self.catalog_checked, self.catalog_lock = {}, False, threading.Lock()
-        # Effort for work mode and self-builds: the same deal, config.json's "effort" (else high) on restart.
-        self.default_effort = config.get("effort") if config.get("effort") in EFFORT_LEVELS else "high"
+        # Effort for work mode and self-builds: the same deal, config.json's "effort" (else medium) on restart.
+        self.default_effort = config.get("effort") if config.get("effort") in EFFORT_LEVELS else "medium"
         self.effort = self.default_effort
         # The desk's recent activity, for "call me". Seeded from the newest captures on disk.
         self.activity = deque(maxlen=30)

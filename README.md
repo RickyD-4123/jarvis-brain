@@ -80,7 +80,7 @@ real files. Say or type, for example, "upgrade yourself: add a dark-mode switch 
 1. A throwaway git worktree is made from the code folder, including uncommitted changes, plus a scratch
    copy of your data for its test servers (`$JARVIS_TEST_HOME`).
 2. Claude Code runs in it like a normal Claude Code session: shell, files, web search and fetch,
-   sub-agents, all pre-approved (`--permission-mode bypassPermissions`, effort high), with `CLAUDE.md`,
+   sub-agents, all pre-approved (`--permission-mode bypassPermissions`, effort medium by default), with `CLAUDE.md`,
    the recent conversation, what memory knows about you and the past builds as context. It tests its own
    work as it goes (`scripts/preview.py` screenshots the desk from its copy). If the request is ambiguous
    it asks first: the question is spoken and shown on a card, and your next words (or the card's answer
