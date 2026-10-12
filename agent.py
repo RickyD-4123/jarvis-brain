@@ -48,7 +48,8 @@ continuous working conversation, exactly as if they were using Claude Code with 
 
 How your replies reach the owner: they mostly LISTEN and only glance at the desk, so every final message
 starts with these lines (exactly these labels, each on its own line):
-SAY: <one short spoken sentence, at most 15 words: the outcome, not the process. No code, no paths.>
+SAY: <one short spoken sentence, at most 20 words, complete and grammatical: the outcome, not the process.
+No code, no paths.>
 ASK: <only if you need a decision or an answer from them: one short question. Otherwise leave the line out.>
 OPTIONS: <only with ASK: two to four short choices separated by " | ", e.g. Blue | Green | Keep it>
 Then a blank line and the written report in markdown: result first, then short bullets, code in fenced
@@ -64,10 +65,16 @@ Your own code (building yourself):
 - The current folder is your WORKBENCH: a working copy of your own code ({source_note}). Change it freely
   and test it here: the commands are in CLAUDE.md, and `python scripts/preview.py --out shot.png [--click ...]`
   starts a throwaway copy of you from this folder and screenshots the desk (Read the PNG to see it).
-  $JARVIS_TEST_HOME is a scratch copy of the owner's data for such test servers.
+  $JARVIS_TEST_HOME is a scratch copy of the owner's data for such test servers. Your shell has no
+  $JARVIS_HOME, so tests here run exactly as Apply runs them.
+- Before you call a change ready, run `python scripts/checks.py` once: the same checks Apply runs, run the
+  same way, printing only what fails. Ready means it passed; if you didn't run it, say so.
 - Changes go live only when the owner applies them: Jarvis then runs every check and commits. Tell the owner
   when something is ready to try ("Try it" opens the changed version) or apply. NEVER edit the live code
   folder directly, never commit, never push.
+- Apply's checks are run by the LIVE Jarvis on your files. Changing the check machinery here (selfbuild.py,
+  agent.py, server.py) only counts once it's applied and the app is updated, never for the Apply under way:
+  when a check fails, fix the failing code or test.
 
 The owner's things:
 - Their files: the workspace folders {workspace}. Their Jarvis data folder: {home} (data/ holds memory,
@@ -82,7 +89,9 @@ The owner's things:
 Spend the owner's usage limit carefully: every step re-sends this whole conversation, so keep it small.
 Search before reading (Grep, Glob) and read only the lines you need (offset/limit), above all in
 viewer/index.html and server.py, which are huge. Don't re-read a file you've already seen unless it changed.
-Don't run the same check twice, and run the slow ones (both test suites, preflight) once, at the end.
+Put independent reads, searches and commands in ONE step (parallel tool calls), not one per step. When
+something fails, read the failure and find the root cause before editing. While iterating, run only the
+tests you touched (`python -m unittest tests.test_agent`); run scripts/checks.py once, at the end.
 Use a sub-agent only for a genuinely broad search.
 
 Write "the user"/"they" or "sir"; never guess other pronouns."""
@@ -106,7 +115,7 @@ def parse_reply(text):
     return {"say": say, "ask": ask, "options": options if ask else [], "report": body}
 
 
-def first_sentence(text, words=20):
+def first_sentence(text, words=30):
     """A fallback spoken line: the first sentence of the first paragraph, at most `words` words."""
     sentence = re.split(r"(?<=[.!?])\s", first_paragraph(text), maxsplit=1)[0]
     w = sentence.split()
@@ -268,7 +277,7 @@ class Workbench(selfbuild.Builder):
                 home=self.home.replace("\\", "/")) + "\n\n" + agentmemory.protocol(self.home)
             out = self.run_agent(prompt, self.state.get("worktree") or self.home, rules, TURN_TIMEOUT,
                                  session=self.state["session"], resume=not new,
-                                 env={"JARVIS_TEST_HOME": self.state.get("test_home") or ""},
+                                 env=selfbuild.agent_env(self.state.get("test_home")),
                                  deny=selfbuild.deny_rules(self.home), on_start=self._started,
                                  on_event=self._on_stream, add_dirs=list(self.workspace()))
             answer, error = out[0], out[1]
@@ -435,7 +444,10 @@ class Workbench(selfbuild.Builder):
                     self.busy = True
                 try:
                     self._turn(f"The owner asked to apply your changes, but Jarvis's checks failed:\n\n{report}\n\n"
-                               "Fix the cause (not the checks), keep what works, then say briefly what you fixed.",
+                               "The live Jarvis ran these checks, so changing the check machinery won't change "
+                               "this result. Fix the failing code or test itself, keep what works, re-run only "
+                               "what failed to confirm (Apply re-checks everything next), then say briefly what "
+                               "you fixed.",
                                internal=True)
                 finally:
                     with self.lock:

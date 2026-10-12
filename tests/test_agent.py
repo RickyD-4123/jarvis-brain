@@ -97,6 +97,7 @@ class WorkTest(unittest.TestCase):
         self.assertIn("SAY: <one short spoken sentence", first["rules"])
         self.assertIn(self.tmp, first["add_dirs"])
         self.assertTrue(os.path.isdir(first["env"]["JARVIS_TEST_HOME"]))
+        self.assertIsNone(first["env"]["JARVIS_HOME"], "his shell never points at the real data folder")
         self.assertIn("workbench-", os.path.basename(first["cwd"]), "he works in his workbench, not the live code")
         self.assertEqual(v["last"]["say"], "Done, sir.")
         self.assertEqual(len(self.turns_done), 2, "turns join the shared conversation")

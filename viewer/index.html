@@ -403,6 +403,16 @@
   .work-opts button:disabled { opacity: .45; cursor: default; }
   .work-opts button kbd { font: inherit; color: var(--muted); margin-right: 4px; }
   .work-report { white-space: normal; font-size: 13.5px; line-height: 1.5; }
+  /* Chat answers rendered from markdown (lists, headings, code) instead of showing the raw symbols */
+  .md { white-space: normal; }
+  .md p { margin: 0 0 8px; }
+  .md p:last-child { margin-bottom: 0; }
+  .md h4 { margin: 10px 0 4px; font-size: 1em; letter-spacing: .04em; }
+  .md ul, .md ol { margin: 4px 0 8px; padding-left: 20px; }
+  .md li { margin: 2px 0; }
+  .md code { font-family: ui-monospace, Consolas, monospace; font-size: .9em; padding: 1px 5px; border-radius: 5px;
+    background: rgba(255,255,255,.08); }
+  .md pre { margin: 6px 0; padding: 10px; border-radius: 8px; background: rgba(0,0,0,.3); overflow: auto; max-height: 340px; }
   .work-report h3, .work-report h4 { margin: 10px 0 4px; font-size: 13px; letter-spacing: .04em; }
   .work-report p { margin: 6px 0; }
   .work-report ul, .work-report ol { margin: 4px 0; padding-left: 20px; }
@@ -1012,7 +1022,9 @@
   const restStatus = note => setStatus(asleep ? "asleep" : micOn ? "listening" : "idle", note);
 
   // ---------------------------------------------------------------- speaking
-  const SPOKEN_SENTENCES = 3;
+  const SPOKEN_WORDS = 70;                    // a spoken answer's budget: whole sentences, then the cue below
+  const REST_CUE = "The rest is on screen.";
+  let lastRest = "";                          // what that cut left unsaid, for "go on"
   const synth = window.speechSynthesis;
   let audioUnlocked = false, pendingSpeech = null, utterances = [];
   let spokenWords = new Set(), spokenWordsTimer = null;      // what he is saying right now (echo filter)
@@ -1030,17 +1042,52 @@
   let voice = pickVoice();
   if (synth) synth.addEventListener("voiceschanged", () => { voice = pickVoice(); });
 
+  // Markdown and code read badly aloud: list items and headings become sentences, links their labels.
+  function spokenText(text) {
+    return String(text).replace(/```[\s\S]*?(```|$)/g, " ").replace(/`([^`]*)`/g, "$1")
+      .replace(/\[\[([^\]]+)\]\]/g, "$1").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, "the link")
+      .replace(/\*\*|__/g, "").replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "")
+      .split(/\n+/).map(l => l.replace(/^\s*(?:#{1,6}|[-*•>]|\d+[.)])\s+/, "").replace(/\s*\|\s*/g, ", ").replace(/^,\s*|,\s*$/g, "").trim())
+      .filter(Boolean).map(l => /[.!?:;,]["')]?$/.test(l) ? l : l + ".").join(" ");
+  }
+  // Sentences, not broken after "e.g." or "Dr.", and long ones cut at a comma: Chrome silently stalls
+  // on long single utterances.
+  const ABBREV = /(?:\b(?:e\.g|i\.e|etc|vs|approx|Mr|Mrs|Ms|Dr|St|No|Jr|Sr|a\.m|p\.m)|\b[A-Z])\.$/;
+  function splitSentences(text) {
+    const out = [];
+    for (const s of text.split(/(?<=[.!?]["')]?)\s+/)) {
+      if (out.length && ABBREV.test(out[out.length - 1])) out[out.length - 1] += " " + s; else out.push(s);
+    }
+    return out.flatMap(s => {
+      const bits = [];
+      while (s.length > 220) {
+        const at = Math.max(s.lastIndexOf(", ", 200), s.lastIndexOf("; ", 200), s.lastIndexOf(": ", 200));
+        const cut = at > 60 ? at + 1 : s.lastIndexOf(" ", 200);
+        if (cut <= 0) break;
+        bits.push(s.slice(0, cut)); s = s.slice(cut).trim();
+      }
+      return [...bits, s];
+    }).map(t => t.trim()).filter(Boolean);
+  }
   // The ONLY function that produces sound. ?mute=1 is checked here so nothing can route around it.
-  function speak(text, limit = SPOKEN_SENTENCES) {
+  function speak(text, limit = SPOKEN_WORDS) {
     if (MUTED) return;
     if (!synth || !text) return;
     if (!audioUnlocked) { pendingSpeech = text; return; }      // never before the first click
     stopSpeaking();
-    const clean = text.replace(/```[\s\S]*?(```|$)/g, " ").replace(/\*\*|__|`/g, "").replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "");
-    // Sentence by sentence (Chrome silently stalls on long single utterances), and never more
-    // than limit: the note itself is on screen, the voice only gives the gist. Brain changes are
-    // spoken in full, since a refusal must read out every model that really works.
-    const parts = clean.split(/(?<=[.!?])\s+/).map(t => t.trim()).filter(Boolean).slice(0, limit);
+    // Whole sentences up to limit words (always at least one), then a cue instead of falling silent
+    // mid-thought: the answer is on screen, and "go on" reads the rest. Brain changes and briefings
+    // pass Infinity, since a refusal must read out every model that really works.
+    const all = splitSentences(spokenText(text));
+    const parts = [];
+    let words = 0;
+    for (const s of all) {
+      const n = s.split(/\s+/).length;
+      if (parts.length && words + n > limit) break;
+      parts.push(s); words += n;
+    }
+    lastRest = all.slice(parts.length).join(" ");
+    if (lastRest) parts.push(REST_CUE);
     spokenWords = new Set(parts.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(w => w.length > 1));
     clearTimeout(spokenWordsTimer);
     const batch = parts.map((part, i) => {
@@ -1774,7 +1821,7 @@
       const used = [...new Set(data.tools || [])];
       const notes = [receipts.join(" "), used.length ? `Used: ${used.join(", ")}` : "",
         (data.refused || []).length ? "Refused this turn: " + data.refused.join(", ") : ""].filter(Boolean).join(" · ");
-      setAnswer(q, esc(data.answer), notes, (data.unbacked_claims || []).length > 0);
+      setAnswer(q, `<div class="md">${mdToHtml(data.answer)}</div>`, notes, (data.unbacked_claims || []).length > 0);
       inflight = null;
       speak(data.answer);
     } catch (err) {
@@ -2290,9 +2337,14 @@
     setAnswer(text, esc(data.say), "", !ok); speak(data.say, Infinity);
   }
 
+  const READ_ON = /^(?:go on|keep going|carry on|continue|read on|read (?:me )?the rest(?: of it)?|(?:tell me|what's) the rest)$/;
   async function ask(q) {
     if (pendingFiles.length) return attach(q);
     if (workMode) return workSend(q);                  // work mode: everything goes to the session
+    if (lastRest && READ_ON.test(q.trim().toLowerCase().replace(/^jarvis[,.!\s]*/, "").replace(/[.!?,\s]+$/, ""))) {
+      input.value = ""; clearBuffer();
+      return speak(lastRest, Infinity);                // what the last spoken answer left unsaid
+    }
     let routed = null;
     try {
       routed = await (await fetch("/route", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -2348,7 +2400,7 @@
       setBrain(data.model);
       const ids = (data.nodes || []).filter(i => GRAPH.nodes[i]);
       const sources = ids.length ? "Sources: " + ids.map(i => `<a data-id="${Number(i)}">${esc(GRAPH.nodes[i].label)}</a>`).join("") : "";
-      setAnswer(q, esc(data.answer).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"), sources);
+      setAnswer(q, `<div class="md">${mdToHtml(data.answer)}</div>`, sources);
       box.dataset.sources = showSources(data.intent, ids);   // camera/panel first, so it's on screen while spoken
       inflight = null;
       speak(data.answer);
@@ -2539,7 +2591,7 @@
       const f = data.frame;
       caption = `<img class="frame" src="${lastFrameUrl}" alt="The frame I looked at">` +
         `Frame grabbed ${esc(new Date(frame.at).toLocaleTimeString())} · ${Number(f.width)}×${Number(f.height)} JPEG · ${Math.round(Number(f.bytes) / 1024)} KB`;
-      setAnswer(q, esc(data.answer), caption);
+      setAnswer(q, `<div class="md">${mdToHtml(data.answer)}</div>`, caption);
       box.dataset.sources = "see";
       inflight = null;
       speak(data.answer);
@@ -2619,7 +2671,7 @@
       if (!res.ok) { const err = new Error(data.error || res.statusText); err.say = data.say; throw err; }
       if (ctrl !== inflight) return;
       setBrain(data.model);
-      setAnswer(q, esc(data.answer), "Attached: " + esc(names));
+      setAnswer(q, `<div class="md">${mdToHtml(data.answer)}</div>`, "Attached: " + esc(names));
       box.dataset.sources = "still";
       inflight = null;
       speak(data.answer);

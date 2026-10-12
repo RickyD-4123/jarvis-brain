@@ -13,6 +13,8 @@ never submitting without your approval). Claude runs through your own Claude Cod
 - `python -m unittest discover -s tests -t .` runs the memory, self-build and app-update tests (no network).
 - See [internship_apply/README.md](internship_apply/README.md) for the internship module.
 - `desktop/` is the Windows desktop app (below). The web version above keeps working unchanged.
+- Spoken answers: whole sentences up to about 70 words, then "The rest is on screen." Say "go on" to hear
+  the rest. The screen shows the full answer, formatted (lists, headings, code).
 
 Requirements: Windows, Python 3.11+, Claude Code signed in (`claude` on PATH), Google Chrome, and
 `pip install -r requirements.txt` for `internship_apply`.
@@ -52,7 +54,7 @@ session with the conversation summary and what memory knows about you.
 
 - **Live**: his steps stream into the conversation as he works (the current one shows in the status
   line). "Stop" interrupts; anything you say while he's busy is queued and delivered when he finishes.
-- **Hear little, see everything**: each reply starts with a one-line `SAY:` headline (at most ~15 words),
+- **Hear little, see everything**: each reply starts with a one-line `SAY:` headline (at most ~20 words),
   and only that is spoken. Code, output and detail go in a written report on the desk (rendered markdown:
   code blocks, tables, lists, links), never read aloud. Short tones mark started / done / needs you /
   failed. When he needs a decision he asks one short question (`ASK:`) with `OPTIONS:` that appear as

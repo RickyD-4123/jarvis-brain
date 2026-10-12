@@ -62,6 +62,7 @@ python scripts/preview.py --out shot.png                   # throwaway server fr
 python scripts/preview.py --out s.png --click "#gear"      # ... after opening Settings; Read the PNG to see it
 python scripts/page_check.py http://127.0.0.1:<port>/      # script errors on a running server
 JARVIS_PORT=<port> python preflight.py                     # every live chain, against a running server
+python scripts/checks.py                                   # everything Apply checks, Apply's way (once, at the end)
 cd desktop && npm test                                     # desktop app (only if desktop/ changed)
 ```
 

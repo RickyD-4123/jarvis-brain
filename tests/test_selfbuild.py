@@ -193,6 +193,7 @@ class SelfBuildTest(unittest.TestCase):
         self.assertIn("Bash(git push:*)", kw["deny"])
         self.assertTrue(any(r.startswith("Read(//") and r.endswith("/secrets/**)") for r in kw["deny"]))
         self.assertTrue(os.path.isdir(kw["env"]["JARVIS_TEST_HOME"]), "a scratch data copy for the builder's servers")
+        self.assertIsNone(kw["env"]["JARVIS_HOME"], "the builder's shell never points at the real data folder")
         self.assertEqual(s["activity"], [["Bash", "python -m unittest"], ["WebSearch", "css grid"]])
         self.assertNotIn("session", s, "the session id stays server-side")
 

@@ -79,6 +79,8 @@ How to work:
   python -m unittest discover -s tests -t .   and   python -m unittest discover -s internship_apply/tests -t .
   python scripts/preview.py --out shot.png [--click "#gear"] ...   starts a throwaway server from this
   folder, screenshots the desk and prints script errors. Read the PNG to SEE your work, and iterate.
+  While iterating run only the tests you touched; at the end run `python scripts/checks.py` once (the
+  checks Jarvis runs after you, run the same way). Put independent tool calls in one step.
 - Match the surrounding code: naming, comment density, idiom. No unrelated refactors.
 - Keep every security check unless the request explicitly asks to change it.
 - Never put personal data in code (names, emails, phone numbers, home-folder paths, keys).
@@ -99,6 +101,12 @@ SHOW: <preview.py steps that show the change, e.g. --click "#gear">  (or "SHOW: 
 
 class BuildError(Exception):
     pass
+
+
+def agent_env(test_home):
+    """The builder's shell: a scratch data copy for test servers, and no JARVIS_HOME (the desktop app's is the
+    owner's real data), so its tests run exactly as Jarvis's checks run them and never write into real data."""
+    return {"JARVIS_TEST_HOME": test_home or "", "JARVIS_HOME": None}
 
 
 def free_port():
@@ -349,7 +357,7 @@ class Builder:
         self.log(f"agent prompt (resume={resume}):\n{prompt}")
         rules = AGENT_RULES + "\n\n" + agentmemory.protocol(self.home)
         out = self.run_agent(prompt, wt, rules, AGENT_TIMEOUT, session=self.state["session"], resume=resume,
-                             env={"JARVIS_TEST_HOME": self.state.get("test_home") or ""},
+                             env=agent_env(self.state.get("test_home")),
                              deny=deny_rules(self.home), on_start=self._started)
         text, error = out[0], out[1]
         activity = out[2] if len(out) > 2 else []
@@ -408,7 +416,8 @@ class Builder:
                 self._set(stage=f"repairing ({attempt + 1} of {MAX_REPAIRS})", checks=checks)
                 report = "\n\n".join(f"CHECK FAILED: {n}\n{d[-3000:]}" for n, _, d in failed)
                 reply = self._agent(f"Jarvis's checks on your change failed:\n\n{report}\n\n"
-                                    "Fix the cause (not the checks). Keep what already works.", resume=True)
+                                    "Fix the cause (not the checks): the failing code or test itself. Keep what "
+                                    "already works, and re-run only what failed to confirm.", resume=True)
                 summary, show = self._summary(reply) or summary, self._show(reply) or show
             ok = all(c[1] for c in checks)
             if self.cancelled:

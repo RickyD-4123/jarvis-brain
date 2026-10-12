@@ -41,6 +41,8 @@ How you answer:
 - A question or chat: one witty sentence, then the substance in plain words, under 60 words.
 - A task (code, a draft, a plan, an essay): deliver the whole piece. Start with ONE short spoken sentence
   saying what it is, then the work. Code goes in ``` fenced blocks; otherwise plain text, short paragraphs.
+- Complete, grammatical sentences that sound natural aloud: your words are spoken. Keep every noun,
+  verb and pronoun in agreement ("the notes ... their", not "its").
 - No emoji, no note ids, no gushing.
 
 Standing orders:
@@ -179,6 +181,9 @@ EFFORT_SET = "Very good, sir. Work mode and self-builds will run at {level} effo
 EFFORT_RESET = "Very good, sir. Back to {level} effort, my standard setting."
 EFFORT_ALREADY = "I'm already working at {level} effort, sir."
 EFFORT_UNKNOWN = "I don't know that effort level, sir. I can work at low, medium, high, extra-high or maximum."
+# The desk's own calls (chat, Google, screen, files) are one quick answer each, so they never inherit
+# Claude Code's default effort: medium for real questions, low for small talk.
+CHAT_EFFORT, SMALL_TALK_EFFORT = "medium", "low"
 
 # The voice: said when you wake him with only "hey Jarvis", and when he goes to sleep.
 WAKE_ACK = "Yes, sir?"
@@ -1247,7 +1252,7 @@ class Brain:
                 used.append(i)
         return answer, used
 
-    def run_claude(self, stdin, model, system_prompt=None, image=False, timeout=CLAUDE_TIMEOUT):
+    def run_claude(self, stdin, model, system_prompt=None, image=False, timeout=CLAUDE_TIMEOUT, effort=None):
         """One `claude -p` turn, --model <model> unless model is None (Claude Code's own default).
         Returns (answer, error, ids of the models that actually answered)."""
         cmd = [self.claude, "-p", "--tools", "", "--no-session-persistence",
@@ -1259,6 +1264,8 @@ class Brain:
             cmd += ["--input-format", "stream-json"]
         if model:
             cmd += ["--model", model]
+        if effort:
+            cmd += ["--effort", effort]
 
         env = os.environ.copy()
         if self.config.get("auth_type") == "subscription_bridge":
@@ -1299,7 +1306,11 @@ class Brain:
             for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
                 run_env.pop(var, None)
         run_env.pop("CLAUDECODE", None)
-        run_env.update(env or {})
+        for k, v in (env or {}).items():                  # None removes a variable
+            if v is None:
+                run_env.pop(k, None)
+            else:
+                run_env[k] = v
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 encoding="utf-8", errors="replace", env=run_env, cwd=cwd,
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -1346,7 +1357,7 @@ class Brain:
         except Exception as e:
             print(f"memory: {e}", file=sys.stderr)
 
-    def ask_claude(self, prompt, image=None, system_prompt=SYSTEM_PROMPT, blocks=None):
+    def ask_claude(self, prompt, image=None, system_prompt=SYSTEM_PROMPT, blocks=None, effort=CHAT_EFFORT):
         """Answer with the current brain. With image (JPEG bytes), the frame and prompt go in as a
         single stream-json user message on stdin: nothing is written to disk and nothing is kept.
         Returns (answer, model id). An answer from any model other than the one selected is thrown
@@ -1363,7 +1374,8 @@ class Brain:
                 {"type": "text", "text": prompt}]}}) + "\n"
         with self.lock:
             flag, expected = self.model_flag, self.current_id()
-        answer, error, used = self.run_claude(stdin, flag, system_prompt, image=image is not None or bool(blocks))
+        answer, error, used = self.run_claude(stdin, flag, system_prompt, image=image is not None or bool(blocks),
+                                              effort=effort)
         if error:
             raise RuntimeError(f"claude CLI error: {error}")
         if expected and used != [expected] or not used:
@@ -1534,7 +1546,7 @@ class Brain:
         if is_small_talk(question):
             with self.lock:
                 prompt = self.build_prompt(question, [], small_talk=True)
-            raw, model = self.ask_claude(prompt)
+            raw, model = self.ask_claude(prompt, effort=SMALL_TALK_EFFORT)
             if (armed := self.standing_from_brain(question, raw, model)):
                 return armed
             answer = USED_RE.sub("", raw).strip()
