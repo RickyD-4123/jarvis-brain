@@ -690,7 +690,12 @@ BUILD_APPLY_RE = re.compile(_JARVIS + r"(?:apply|install|accept|approve|ship)\s+
 BUILD_DISCARD_RE = re.compile(_JARVIS + r"(?:discard|scrap|reject|drop|bin|throw\s+away|cancel|stop|abort)\s+(?:the\s+|that\s+|this\s+)?(?:self[- ]?build|build|upgrade)\b", re.I)
 BUILD_UNDO_RE = re.compile(_JARVIS + r"(?:undo|revert|roll\s+back|take\s+back)\s+(?:the\s+|that\s+|this\s+|your\s+)?"
                            r"(?:last\s+|latest\s+|previous\s+)?(?:self[- ]?build|build|upgrade|change\s+you\s+made)\b", re.I)
-APP_UPDATE_RE = re.compile(_JARVIS + r"(?:update|rebuild|upgrade|refresh)\s+(?:the\s+|your\s+)?(?:desktop\s+)?app\b", re.I)
+# Any lead-in ("all right, it's time to update that the app"), but the sentence must END with it and
+# hold no negation or question word, so "don't update the app" / "how do I update the app" stay chat
+# (and "remind me to..." / "upgrade yourself..." keep their own routes).
+APP_UPDATE_RE = re.compile(r"^(?!.*\b(?:don'?t|do\s+not|not|never|how|why|when|should|whether|remind|yourself)\b)"
+                           r".*?\b(?:update|rebuild|upgrade|refresh)\s+(?:(?:the|that|your|this)\s+){0,2}(?:desktop\s+)?app"
+                           r"(?:[\s,.!]+(?:now|please|jarvis))*[\s,.!]*$", re.I)
 APP_INSTALL_RE = re.compile(_JARVIS + r"install\s+(?:the\s+)?(?:new\s+)?(?:app\s+)?(?:update|version)\b", re.I)
 # Work mode (agent.py): switched on and off by your own words, and steered while it's on.
 WORK_ON_RE = re.compile(_JARVIS + r"(?:let'?s\s+(?:get\s+to\s+)?work|let\s+us\s+work|(?:start|enter|switch\s+to|turn\s+on|go\s+into)\s+"
