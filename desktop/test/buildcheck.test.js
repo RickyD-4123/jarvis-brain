@@ -56,6 +56,15 @@ test('a clean installer passes and its contents are listed', { skip }, (t) => {
 });
 
 const fakeKey = 'sk-ant-' + 'api03-' + 'Q'.repeat(40);         // built here, so no key-shaped text is committed
+const pemHead = '-----BEGIN ' + 'OPENSSH PRIVATE' + ' KEY-----';
+
+// cryptography's ssh.py ships the bare header as a constant: that alone is not a key.
+test('a library holding only the PEM header passes', { skip }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-bc-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const r = check(fakeInstaller(dir, { 'resources/backend/_internal/ssh.txt': `_SK_START = b"${pemHead}"\n_SK_END = 1\n` }));
+  assert.strictEqual(r.code, 0, r.out);
+});
 const PLANTS = {
   '.env': ['resources/backend/.env', 'ANTHROPIC_API_KEY=x\n'],
   'profile.yaml': ['resources/userdata/internship_apply/data/profile.yaml', 'personal:\n  name: Jane Doe\n'],
@@ -66,6 +75,7 @@ const PLANTS = {
   'Google token': ['resources/secrets/google_token.dpapi', 'xx'],
   'config.json': ['resources/backend/config.json', '{"google_client_secret": "x"}'],
   'key in a text file': ['resources/backend/_internal/settings.txt', `key = ${fakeKey}\n`],
+  'PEM private key': ['resources/backend/_internal/deploy.txt', `${pemHead}\n${'A'.repeat(64)}\n`],
 };
 
 for (const [what, [rel, text]] of Object.entries(PLANTS)) {

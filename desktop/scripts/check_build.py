@@ -58,6 +58,9 @@ FORBIDDEN = [
     ("Jarvis data folder", r"(?:^|/)home/(?:data|secrets)/"),
 ]
 FORBIDDEN_RES = [(why, re.compile(rx, re.I)) for why, rx in FORBIDDEN]
+# Libraries carry the bare PEM header as a constant (cryptography's ssh.py: _SK_START = b"-----BEGIN
+# OPENSSH PRIVATE KEY-----"), so in shipped code a private key only counts with a base64 body after it.
+KEY_BODY = re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----\s*[A-Za-z0-9+/=]{40,}")
 
 
 def seven_zip(*args):
@@ -185,6 +188,8 @@ def check(entries, strings):
             text = data.decode("utf-8", "replace") if not isinstance(data, str) else data
             for name, rx in scan.KEY_RES:
                 m = rx.search(text)
+                if m and name == "private key":
+                    m = KEY_BODY.search(text)
                 if m:
                     problems.append(f"{rel}: {name} ({scan.mask(m.group())})")
             low = text.lower()
