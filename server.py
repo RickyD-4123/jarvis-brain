@@ -1031,9 +1031,43 @@ class Brain:
             return self.set_effort(m.group("a") or m.group("b"))
         if BUILD_UNDO_RE.match(t):
             return self.builder.undo()
-        if APP_UPDATE_RE.match(t) or APP_INSTALL_RE.match(t):
-            return {"ok": True, **({"say": self.app.start()} if APP_UPDATE_RE.match(t) else self.install_app())}
+        if APP_UPDATE_RE.match(t):
+            return self.work_update()
+        if APP_INSTALL_RE.match(t):
+            return {"ok": True, **self.install_app()}
         return {**w.send(t), "sent": True}
+
+    def work_update(self):
+        """Work mode's Update the app: his checked changes are committed, then the desktop app is rebuilt and
+        installed by itself. A failed build goes back to him to fix, like a failed check."""
+        return {"ok": True, "say": self.work.apply(then=self.work_build_app)}
+
+    def work_build_app(self, applied):
+        """After the commit (applied: its result, None when nothing was waiting): build the app. The line to say."""
+        say = self.app.start(then=self.work_app_built)
+        if applied and self.app.then == self.work_app_built:   # started (not "already building" or no app code)
+            return (f"Committed as {applied['commit']}, sir. Building the desktop app now; it takes several minutes, "
+                    "and I'll install it myself when it's ready.")
+        return (f"Committed as {applied['commit']}, sir. " if applied else "") + say
+
+    def work_app_built(self, status):
+        if status.get("status") == "ready":
+            r = self.install_app()                        # from the desktop app: closes, installs, reopens
+            self.work._say(r["say"], ok=r.get("ok", False))
+            return
+        log = status.get("log") or ""
+        try:
+            with open(log, encoding="utf-8", errors="replace") as f:
+                tail = f.read()[-4000:]
+        except OSError:
+            tail = "(no build log)"
+        self.work._say("The app build failed, sir. I'm looking into it.", ok=False)
+        self.work.fix(f"The owner pressed Update the app: your changes were committed, but building the desktop app "
+                      f"failed: {status.get('error')}\n\nThe end of the build log ({log.replace(os.sep, '/')}):\n"
+                      f"{tail}\n\n"
+                      "Find the root cause and fix it in the workbench (read the whole log file if this end isn't "
+                      "enough; don't rebuild the app yourself, it takes many minutes). Every check runs by itself "
+                      "after you; the owner then presses Update the app again.")
 
     def work_preview(self):
         r = self.work.preview()
@@ -1587,6 +1621,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     timeout = REQUEST_TIMEOUT                            # socket timeout: a stalled client can't hold a thread
 
+    def log_request(self, code="-", size="-"):
+        # The desk polls these every second or so: logging each one buried everything else in jarvis.log.
+        quiet = ("/agent", "/desk", "/health")
+        if str(code).startswith(("2", "3")) and self.command == "GET" and urllib.parse.urlsplit(self.path).path in quiet:
+            return
+        super().log_request(code, size)
+
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -1695,8 +1736,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            self.close_connection = True                 # the page stopped waiting (Stop, a new question): fine
 
     def handle_see(self):
         """POST /see?q=<question>&t=<capture time, ms since epoch>, body: one raw JPEG frame."""
@@ -1936,7 +1980,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, r)
             return self.send_json(400, {"error": "op must be apply, discard, preview, answer or undo"})
         if route == "/agent":
-            # Work mode: a message, or the buttons (Stop, Try it, Apply, Discard, New session).
+            # Work mode: a message, or the buttons (Stop, Update the app, Try it, Discard, New session).
             op, w = data.get("op", "send"), self.brain.work
             if op == "send":
                 text = str(data.get("text", "")).strip()[:selfbuild.MAX_REQUEST]
@@ -1947,13 +1991,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, {"ok": True, "say": w.stop()})
             if op == "apply":
                 return self.send_json(200, {"ok": True, "say": w.apply()})
+            if op == "update":
+                return self.send_json(200, self.brain.work_update())
             if op == "discard":
                 return self.send_json(200, {"ok": True, "say": w.discard()})
             if op == "preview":
                 return self.send_json(200, self.brain.work_preview())
             if op == "new":
                 return self.send_json(200, {"ok": True, "say": w.new_session()})
-            return self.send_json(400, {"error": "op must be send, stop, apply, discard, preview or new"})
+            return self.send_json(400, {"error": "op must be send, stop, update, apply, discard, preview or new"})
         if route == "/app":
             # The desktop app update card: build a new installer, or install the one that's ready.
             op = data.get("op")

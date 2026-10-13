@@ -62,7 +62,7 @@ python scripts/preview.py --out shot.png                   # throwaway server fr
 python scripts/preview.py --out s.png --click "#gear"      # ... after opening Settings; Read the PNG to see it
 python scripts/page_check.py http://127.0.0.1:<port>/      # script errors on a running server
 JARVIS_PORT=<port> python preflight.py                     # every live chain, against a running server
-python scripts/checks.py                                   # everything Apply checks, Apply's way (once, at the end)
+python scripts/checks.py                                   # everything Apply checks, Apply's way (work mode runs it by itself)
 cd desktop && npm test                                     # desktop app (only if desktop/ changed)
 ```
 
@@ -76,7 +76,8 @@ the conversation feed (`.turn` each exchange), `#avatar` the reactor, `#systems`
 ## Work mode specifics
 
 In work mode you are a persistent session in the workbench (a git worktree of the live code). Edit and test
-here; the owner applies with the bar's Apply button (Jarvis then runs every check and commits). Never edit
+here. After your turn Jarvis runs every check by itself and hands you failures; the owner then picks Update
+the app (commit + rebuild/reinstall the desktop app), Try it or Discard. Never edit
 the live code folder, never commit or push. Stop any test server you start (`scripts/preview.py` stops its
 own; a `--serve` one you started in the background is yours to stop). Keep your notes in your memory folder.
 

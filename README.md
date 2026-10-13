@@ -63,8 +63,10 @@ session with the conversation summary and what memory knows about you.
   "quiet", "brief", "full".
 - **Building himself**: he works in his *workbench*, a persistent working copy of his code
   (`%LOCALAPPDATA%\Jarvis\builds\workbench`), and tests there (`scripts/preview.py` lets him see the
-  page). Changes wait in the bar above the message box: **Try it**, **Apply** (every check runs; a failure
-  goes back to him to fix and is re-checked; only a clean result is committed), **Discard**. Undo works too.
+  page). After a turn that changed it, every check runs by itself; a failure goes back to him to fix and
+  is re-checked. The bar above the message box then offers **Update the app** (commit, rebuild and
+  reinstall the desktop app; a failed build goes back to him too), **Try it** and **Discard**. Undo works too.
+  When he asks a question with choices, an **Other** bubble lets you type your own answer.
 - **Anything else**: your workspace folders are open to him, so documents, research, scripts and file
   organising work the same way. He asks before anything hard to reverse.
 - **Not here**: your Google account stays with the normal desk. His file tools are denied your config and

@@ -2105,7 +2105,8 @@
   }
   function workReplyHtml(L) {
     const ask = L.ask ? `<div class="work-ask"><b>${esc(L.ask)}</b>` + ((L.options || []).length
-      ? '<div class="work-opts">' + L.options.map((o, i) => `<button type="button" data-wopt="${esc(o)}"><kbd>${i + 1}</kbd>${esc(o)}</button>`).join("") + "</div>"
+      ? '<div class="work-opts">' + L.options.map((o, i) => `<button type="button" data-wopt="${esc(o)}"><kbd>${i + 1}</kbd>${esc(o)}</button>`).join("")
+        + `<button type="button" data-wother="1" title="Type (or say) your own answer"><kbd>${L.options.length + 1}</kbd>Other…</button></div>`
       : "") + "</div>" : "";
     const report = L.text && L.text !== L.say ? `<div class="work-report">${mdToHtml(L.text)}</div>` : "";
     return `<p class="work-say">${esc(L.say || "Done.")}</p>` + ask + report + workStatsHtml(L.stats);
@@ -2121,7 +2122,13 @@
     if (workVoice === "full") return speakReport(L);
     speak([L.say, L.ask].filter(Boolean).join(" "), Infinity);
   }
+  function workOther() {                              // "Other": your own words, typed or spoken, are the answer
+    input.dataset.other = "1";
+    input.placeholder = "Type your own answer…";
+    input.focus();
+  }
   box.addEventListener("click", e => {                // one-click answers to his question
+    if (e.target.closest("button[data-wother]")) return workOther();
     const btn = e.target.closest("button[data-wopt]");
     if (!btn) return;
     btn.closest(".work-opts").querySelectorAll("button").forEach(b => { b.disabled = true; });
@@ -2145,6 +2152,9 @@
       if (v === "quiet") workSound("done"); else speak(say);
       return true;
     }
+    if (/^(?:other|something else|none of (?:those|them|these)|(?:option |number )?(?:five|5))$/.test(t) && lastWork && (lastWork.options || []).length) {
+      workOther(); speak("Go ahead, sir."); return true;
+    }
     const om = t.match(/^(?:option |choice |number |the )?(one|two|three|four|first|second|third|fourth|last|[1-4])(?: one| option)?$/);
     if (om && lastWork && (lastWork.options || []).length) {
       const opts = lastWork.options, i = om[1] === "last" ? opts.length : (WORDS[om[1]] || +om[1]);
@@ -2155,6 +2165,7 @@
   async function workSend(q) {
     if (workLocal(q)) { input.value = ""; return; }
     stopSpeaking(); clearBuffer(); input.value = "";
+    if (input.dataset.other) { delete input.dataset.other; input.placeholder = "What are we working on?"; }
     touch();
     const d = await workPost({ op: "send", text: q });
     if (d.work === false) setWork(false);
@@ -2199,14 +2210,16 @@
     workbar.hidden = !workMode || (!files.length && !d.applying && !d.queue && !d.busy && !d.session);
     if (workbar.hidden) return;
     const busy = d.busy || d.applying;
+    const checked = d.checking ? "checking them…" : d.verified ? "every check passes"
+      : (d.failing || []).length ? `failing: ${d.failing.map(esc).join(", ")}` : busy ? "" : "not checked yet";
     const session = d.session ? [`${d.turns} turn${d.turns === 1 ? "" : "s"} this session`, ctxMeter(d.context, d.fresh_at)].filter(Boolean).join(" · ") : "";
-    const note = [d.applying ? "Checking and applying…" : files.length
+    const note = [d.applying && !d.checking ? "Committing…" : files.length
       ? `${files.length} file${files.length === 1 ? "" : "s"} changed in my workbench: ${files.slice(0, 3).map(([, p]) => esc(p)).join(", ")}`
-        + (files.length > 3 ? "…" : "") : "", d.queue ? `${d.queue} message${d.queue === 1 ? "" : "s"} queued` : "", session];
+        + (files.length > 3 ? "…" : "") + (checked ? ` (${checked})` : "") : "", d.queue ? `${d.queue} message${d.queue === 1 ? "" : "s"} queued` : "", session];
     workbar.innerHTML = `<span class="grow">${note.filter(Boolean).join(" · ")}</span>`
       + (d.busy ? `<button type="button" data-wop="stop">Stop</button>` : "")
       + (files.length ? `<button type="button" data-wop="preview" ${busy ? "disabled" : ""}>Try it</button>`
-      + `<button type="button" data-wop="apply" class="apply" ${busy ? "disabled" : ""}>Apply</button>`
+      + `<button type="button" data-wop="update" class="apply" ${busy ? "disabled" : ""} title="Commit the checked changes, then rebuild and reinstall the desktop app">Update the app</button>`
       + `<button type="button" data-wop="discard" ${busy ? "disabled" : ""}>Discard</button>` : "")
       + (d.session && !busy ? `<button type="button" data-wop="new" title="Start a fresh conversation: cheaper steps; my notes and your changes stay">New session</button>` : "");
   }
@@ -2216,7 +2229,7 @@
     workbar.querySelectorAll("button").forEach(b => { b.disabled = true; });
     const d = await workPost({ op: btn.dataset.wop });
     const say = d.say || d.error || "Done.";
-    setAnswer({ preview: "Try it", apply: "Apply the changes", discard: "Discard the changes", stop: "Stop",
+    setAnswer({ preview: "Try it", update: "Update the app", apply: "Apply the changes", discard: "Discard the changes", stop: "Stop",
                 new: "New session" }[btn.dataset.wop], esc(say), "", d.ok === false);
     speak(say, Infinity);
     workPoll();
@@ -2261,7 +2274,7 @@
     workLive = d.turn || null;
     if (d.fresh_at) workFreshAt = d.fresh_at;
     workTick();
-    if (workBusy) setStatus("thinking", d.applying ? "checking the changes" : workStepNote || "working");
+    if (workBusy) setStatus("thinking", d.checking ? "checking the changes" : d.applying ? "committing" : workStepNote || "working");
     else if (mode === "thinking" && !inflight) restStatus();
     renderWorkbar(d);
     workTimer = setTimeout(workPoll, workBusy ? 800 : workMode ? 3000 : 15000);

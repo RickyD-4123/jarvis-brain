@@ -35,6 +35,7 @@ class WorkTest(unittest.TestCase):
         git(self.src, "commit", "-q", "-m", "start")
         self.calls, self.check_results, self.turns_done = [], [], []
         self.edit = None                                  # what the fake agent writes, per call
+        self.edits, self.reply, self.checked = {}, None, []   # per-call edits, his reply, each check run
         self.usage = 1_000                                # context size the fake agent reports
 
     def tearDown(self):
@@ -61,11 +62,13 @@ class WorkTest(unittest.TestCase):
         kw["on_event"]({"type": "result", "num_turns": 7, "modelUsage": {"claude-opus-5-5": {
             "inputTokens": 30 * n, "outputTokens": 900 * n, "cacheReadInputTokens": 50_000 * n,
             "cacheCreationInputTokens": 2_000 * n, "costUSD": 0.4213 * n}}})
-        if self.edit:
-            self.write("viewer/index.html", self.edit, root=cwd)
-        return f"Done, sir.\n\nDetails: I edited the page ({len(self.calls)}).", None, []
+        edit = self.edits.get(len(self.calls), self.edit)
+        if edit:
+            self.write("viewer/index.html", edit, root=cwd)
+        return self.reply or f"Done, sir.\n\nDetails: I edited the page ({len(self.calls)}).", None, []
 
     def checks(self, wt, changed):
+        self.checked.append(changed)
         return self.check_results.pop(0) if self.check_results else [("Fake check", True, "fine")]
 
     def bench(self, context=lambda: "SUMMARY: they like blue"):
@@ -173,37 +176,100 @@ class WorkTest(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertIn("and also this", self.calls[1]["prompt"])
 
-    def test_changes_wait_in_the_workbench_until_applied(self):
+    def test_changes_are_checked_by_themselves_and_wait_until_applied(self):
         self.edit = "<p>hello</p>\n<p>blue</p>\n"
+        self.reply = "SAY: It's blue, sir.\nTITLE: Page turns blue\n\nDetails."
         w = self.bench()
         w.send("make it blue")
         v = self.wait(w)
         self.assertEqual(v["pending"], [["M", "viewer/index.html"]])
         self.assertEqual(self.read("viewer/index.html"), "<p>hello</p>\n", "the live code is untouched")
-        self.assertIn("Running every check", w.apply())
+        self.assertEqual(len(self.checked), 1, "every check ran after the turn, without being asked")
+        self.assertTrue(v["verified"])
+        self.assertIn("Every check passes", v["last"]["say"])
+        self.assertIn("passed every check", w.apply(), "already checked: straight to the commit")
         v = self.wait(w)
+        self.assertEqual(len(self.checked), 1, "not checked twice")
         self.assertIn("Applied and committed", v["last"]["text"])
         self.assertIn("<p>blue</p>", self.read("viewer/index.html"))
-        self.assertIn("Work mode: make it blue", git(self.src, "log", "-1", "--format=%B"))
+        msg = git(self.src, "log", "-1", "--format=%B")
+        self.assertIn("Work mode: Page turns blue", msg)
+        self.assertIn("It's blue, sir.", msg, "his summary, not the checks' line")
         self.assertEqual(v["pending"], [], "the workbench matches the live code again")
         self.assertEqual(w.history()[-1]["status"], "applied")
         r = w.undo()
         self.assertTrue(r["ok"], r["say"])
         self.assertEqual(self.read("viewer/index.html"), "<p>hello</p>\n")
 
-    def test_failed_checks_go_back_to_him_before_anything_is_applied(self):
+    def test_failed_checks_go_back_to_him_before_anything_is_offered(self):
         self.edit = "<p>broken</p>\n"
         self.check_results = [[("Page loads", False, "TypeError: boom")], [("Page loads", True, "")]]
+        self.edits = {2: "<p>fixed</p>\n"}                # the second call (his fix) writes this
+        w = self.bench()
+        w.send("change it")
+        v = self.wait(w)
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("CHECK FAILED: Page loads", self.calls[-1]["prompt"])
+        self.assertIn("checks.txt", self.calls[-1]["prompt"], "the full output is in a file to read, not re-run")
+        self.assertTrue(self.calls[-1]["resume"], "the fix happens in the same conversation")
+        self.assertTrue(v["verified"])
+        w.apply()
+        v = self.wait(w)
+        self.assertIn("Applied", v["last"]["text"])
+        self.assertEqual(self.read("viewer/index.html"), "<p>fixed</p>\n")
+        self.assertIn("Work mode: change it", git(self.src, "log", "-1", "--format=%B"))
+
+    def test_checks_that_keep_failing_are_reported_not_offered(self):
+        self.edit = "<p>broken</p>\n"
+        self.check_results = [[("Preflight", False, "boom")]] * (agent.MAX_CHECK_ROUNDS + 1)
+        self.edits = {n: f"<p>try {n}</p>\n" for n in range(2, agent.MAX_CHECK_ROUNDS + 2)}
+        w = self.bench()
+        w.send("change it")
+        v = self.wait(w)
+        self.assertFalse(v["verified"])
+        self.assertEqual(v["failing"], ["Preflight"])
+        self.assertIn("still fail", v["last"]["say"])
+        self.assertEqual(len(self.calls), 1 + agent.MAX_CHECK_ROUNDS)
+
+    def test_no_checks_after_a_question_and_answers_never_name_the_change(self):
+        self.edit = "<p>half</p>\n"
+        self.reply = "SAY: One thing first, sir.\nASK: Loosen it?\nOPTIONS: Yes, loosen it | No, leave it\n\nWhy."
+        w = self.bench()
+        w.send("the update command missed my words")
+        v = self.wait(w)
+        self.assertEqual(self.checked, [], "a half-done change isn't checked")
+        self.assertEqual(v["last"]["options"], ["Yes, loosen it", "No, leave it"])
+        self.reply = None
+        self.edits = {2: "<p>whole</p>\n"}
+        w.send("Yes, loosen it.")
+        self.wait(w)
+        self.assertEqual(len(self.checked), 1)
+        w.apply()
+        self.wait(w)
+        msg = git(self.src, "log", "-1", "--format=%B")
+        self.assertIn("Work mode: the update command missed my words", msg)
+        self.assertIn("Answered: Yes, loosen it.", msg)
+
+    def test_update_the_app_commits_then_hands_on(self):
+        self.edit = "<p>new</p>\n"
         w = self.bench()
         w.send("change it")
         self.wait(w)
-        self.edit = "<p>fixed</p>\n"
-        w.apply()
+        got = []
+        w.apply(then=lambda r: got.append(r) or "Building the app now, sir.")
         v = self.wait(w)
-        self.assertIn("CHECK FAILED: Page loads", self.calls[-1]["prompt"])
-        self.assertTrue(self.calls[-1]["resume"], "the fix happens in the same conversation")
-        self.assertIn("Applied", v["last"]["text"])
-        self.assertEqual(self.read("viewer/index.html"), "<p>fixed</p>\n")
+        self.assertTrue(got and got[0]["ok"])
+        self.assertEqual(v["last"]["say"], "Building the app now, sir.")
+        self.assertEqual(w.apply(then=lambda r: "Nothing to commit; building anyway, sir." if r is None else "?"),
+                         "Nothing to commit; building anyway, sir.")
+
+    def test_a_failure_reported_by_jarvis_goes_to_him_to_fix(self):
+        w = self.bench()
+        w.fix("The app build failed: private key found")
+        self.wait(w)
+        self.assertIn("private key found", self.calls[-1]["prompt"])
+        self.assertNotIn("The app build failed: private key found", w.state.get("requests") or [],
+                         "not something the owner asked")
 
     def test_discard_puts_the_workbench_back(self):
         self.edit = "<p>nope</p>\n"
@@ -261,6 +327,8 @@ class WorkTest(unittest.TestCase):
         self.assertEqual(plain["say"], "Done, sir.")
         self.assertEqual(plain["ask"], "")
         self.assertEqual(agent.parse_reply("SAY: hi\nOPTIONS: a | b")["options"], [], "options only come with a question")
+        self.assertEqual(agent.parse_reply("SAY: hi\n**TITLE:** Sleep phrase works after any lead-in\n\nr")["title"],
+                         "Sleep phrase works after any lead-in")
 
     def test_the_turn_keeps_headline_question_and_report_apart(self):
         def agent_with_question(prompt, cwd, rules, timeout, **kw):

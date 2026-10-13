@@ -56,7 +56,7 @@ class AppUpdater:
         self.frozen = getattr(sys, "frozen", False) if frozen is None else frozen
         self.logs = os.path.realpath(logs_dir or os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(),
                                                               "Jarvis", "builds"))
-        self.state, self.lock, self.thread = {}, threading.Lock(), None
+        self.state, self.lock, self.thread, self.then = {}, threading.Lock(), None, None
 
     def status(self):
         with self.lock:
@@ -64,13 +64,16 @@ class AppUpdater:
 
     # ---------------------------------------------------------------- build
 
-    def start(self):
+    def start(self, then=None):
+        """then(status): called when the build ends, ready or failed (work mode's Update the app installs a good
+        one by itself and hands a failure to the session to fix); without it, a card asks you."""
         if not self.source or not os.path.isfile(os.path.join(self.source, "desktop", "package.json")):
             return "I can't find the desktop app's code, sir. Set source_dir in config.json and ask me again."
         with self.lock:
             if self.state.get("status") == "building":
                 return "I'm already building the app, sir. It takes a few minutes."
             self.state = {"status": "building", "started": time.time()}
+        self.then = then
         self.thread = threading.Thread(target=self._build, daemon=True)
         self.thread.start()
         return ("Building the desktop app now, sir: a new version number, the backend, the installer and its "
@@ -118,6 +121,8 @@ class AppUpdater:
             self._remember_source()
             with self.lock:
                 self.state.update(status="ready", installer=installer, committed=committed, finished=time.time())
+            if self._then():
+                return
             self.cards.add("app", "App update ready", f"Version {new} is built and checked (it was {old}). "
                            "Install closes me, installs it over the old version and opens me again; your data stays.",
                            "normal", ref={"app": self.status()})
@@ -126,8 +131,20 @@ class AppUpdater:
                 self._write(p, text)
             with self.lock:
                 self.state.update(status="failed", error=str(e), finished=time.time())
+            if self._then():
+                return
             self.cards.add("app", "App update failed", f"I couldn't build the app: {e}", "normal",
                            ref={"app": self.status()})
+
+    def _then(self):
+        then, self.then = self.then, None
+        if not then:
+            return False
+        try:
+            then(self.status())
+        except Exception as e:
+            print(f"app update: {e}", file=sys.stderr)
+        return True
 
     @staticmethod
     def _write(path, text):

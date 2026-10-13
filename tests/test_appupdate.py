@@ -98,6 +98,15 @@ class AppUpdateTest(unittest.TestCase):
         self.assertEqual(git(self.src, "status", "--porcelain"), "")
         self.assertEqual(self.cards.cards[-1]["title"], "App update failed")
 
+    def test_work_mode_hears_how_the_build_ended_instead_of_a_card(self):
+        for ok in (True, False):
+            u, ended, before = self.updater(build_ok=ok), [], len(self.cards.cards)
+            u.start(then=ended.append)
+            u.thread.join(30)
+            self.assertEqual([s["status"] for s in ended], ["ready" if ok else "failed"])
+            self.assertEqual(len(self.cards.cards), before, "work mode installs or fixes it: no card to click")
+            git(self.src, "reset", "-q", "--hard", "HEAD~1" if ok else "HEAD")
+
     def test_install_from_the_web_version(self):
         u = self.updater(running=True)
         self.assertFalse(u.install()["ok"], "nothing built yet")
