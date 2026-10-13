@@ -68,8 +68,18 @@
     border: 1px solid var(--border); border-radius: 14px; max-height: 42vh; overflow-y: auto; scroll-behavior: smooth; }
   #answer.show { display: block; }
   /* Collapsed (the default): only the current exchange shows. Expanded: the whole history, scrollable. */
-  #answer:not(.expanded) > :not(:last-child) { display: none; }
-  #answer:not(.expanded) > :last-child { border-bottom: 0; }
+  #answer:not(.expanded) > :not(.latest) { display: none; }
+  #answer:not(.expanded) > .latest { border-bottom: 0; }
+  /* Two sections: General (normal chat) and Work (work mode). Untagged turns are General. */
+  #answer[data-view="general"] > [data-mode="work"], #answer[data-view="work"] > :not([data-mode="work"]) { display: none; }
+  #answer.none::before { content: "Nothing here yet, sir."; display: block; padding: 10px 0; color: var(--muted); font-size: 12px; }
+  #feedTabs { position: absolute; top: -13px; left: 18px; z-index: 5; display: none; gap: 2px; padding: 2px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--border); backdrop-filter: blur(12px); }
+  #feedTabs.show { display: inline-flex; }
+  #feedTabs button { padding: 2px 10px; border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-size: 11px;
+    letter-spacing: .06em; color: var(--muted); background: transparent; }
+  #feedTabs button:hover { color: var(--text); }
+  #feedTabs button[aria-selected="true"] { color: var(--text); background: var(--border); }
   #answer.expanded { max-height: 62vh; }
   #history { position: absolute; top: -13px; right: 18px; z-index: 5; display: none; align-items: center; gap: 6px;
     padding: 3px 11px 3px 9px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 11px; letter-spacing: .06em;
@@ -553,7 +563,11 @@
   <button type="button" id="history" aria-expanded="false" aria-controls="answer" title="Show what we talked about earlier">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg><span>Earlier</span>
   </button>
-  <div id="answer" role="log" aria-live="polite"></div>
+  <div id="feedTabs" role="tablist" aria-label="Conversation sections">
+    <button type="button" role="tab" data-view="general" aria-selected="true">General</button>
+    <button type="button" role="tab" data-view="work" aria-selected="false">Work</button>
+  </div>
+  <div id="answer" role="log" aria-live="polite" data-view="general"></div>
   <div id="attached" aria-label="Attached files"></div>
   <div id="workbar" hidden aria-live="polite"></div>
   <form id="ask">
@@ -958,10 +972,24 @@
     try { sessionStorage.setItem(FEED_KEY, box.innerHTML); } catch {}
   }
   function scrollFeed() { box.scrollTop = box.scrollHeight; updateHistory(); }
+  // General and Work sections share one feed: each entry carries its mode, the view shows one mode.
+  const feedTabs = document.getElementById("feedTabs");
+  const feedMode = el => el.dataset.mode === "work" ? "work" : "general";
+  const viewed = () => [...box.children].filter(el => feedMode(el) === box.dataset.view);
+  function setView(v) {
+    box.dataset.view = v;
+    feedTabs.querySelectorAll("button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === v)));
+    scrollFeed();
+  }
+  feedTabs.onclick = e => { const b = e.target.closest("button[data-view]"); if (b) setView(b.dataset.view); };
   // The "Earlier" tab: shown once there's something before the current exchange; expands and collapses.
   const historyBtn = document.getElementById("history");
   function updateHistory() {
-    const earlier = Math.max(0, box.children.length - 1);
+    const mine = viewed();
+    [...box.children].forEach(el => el.classList.toggle("latest", el === mine[mine.length - 1]));
+    box.classList.toggle("none", !mine.length);
+    feedTabs.classList.toggle("show", box.classList.contains("show"));
+    const earlier = Math.max(0, mine.length - 1);
     const open = box.classList.contains("expanded");
     historyBtn.classList.toggle("show", earlier > 0 && box.classList.contains("show"));
     historyBtn.setAttribute("aria-expanded", String(open));
@@ -977,6 +1005,7 @@
     const turn = pending ? current : document.createElement("div");
     if (!pending) {
       turn.className = "turn";
+      turn.dataset.mode = document.body.classList.contains("working") ? "work" : "general";
       turn.innerHTML = '<div class="q"></div><div class="a"></div><div class="sources"></div>';
       box.appendChild(turn);
       while (box.children.length > FEED_MAX) box.firstElementChild.remove();
@@ -989,7 +1018,7 @@
     turn.dataset.pending = /class="dots"/.test(html) ? "1" : "0";
     current = turn;
     box.classList.add("show");
-    scrollFeed();
+    if (feedMode(turn) !== box.dataset.view) setView(feedMode(turn)); else scrollFeed();
     saveFeed();
   };
   try {
@@ -1964,6 +1993,7 @@
     try { sessionStorage.setItem("jarvis.work", on ? "1" : "0"); } catch (_) {}
     workBtn.setAttribute("aria-pressed", String(on));
     document.body.classList.toggle("working", on);
+    setView(on ? "work" : "general");
     input.placeholder = on ? "What are we working on?" : "What can I do for you today?";
     workPoll();
   }
@@ -2692,8 +2722,10 @@
     if (inflight) { inflight.abort(); inflight = null; send.disabled = false; }
     await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) });
     if (workMode) await workPost({ op: "new" });       // and a fresh work session (his notes and changes stay)
-    if (box.children.length && !(box.lastElementChild || {}).classList?.contains("divider")) {
+    const mine = viewed();
+    if (mine.length && !mine[mine.length - 1].classList.contains("divider")) {
       const d = document.createElement("div"); d.className = "divider"; d.textContent = "New conversation";
+      d.dataset.mode = box.dataset.view;
       box.appendChild(d); current = null; scrollFeed(); saveFeed();
     }
     clearHighlight(); closePanel(); restStatus();
