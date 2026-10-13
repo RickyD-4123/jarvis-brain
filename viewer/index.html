@@ -1280,7 +1280,12 @@
   // "yo jarvis", "ay jarvis" ("aye"/"ayy" are how recognisers spell "ay"). Nothing else wakes him:
   // not "okay jarvis", not "jarvis" alone. Awake, follow-ups need no wake phrase until he sleeps.
   const WAKE_RE = /^\s*(?:hey|yo|ay|aye|ayy)[\s,.!-]+jarvis\b[\s,.!?:;-]*/i;
-  const SLEEP_RE = /^\s*(?:(?:hey|yo|ay|aye|ayy)[\s,.!-]+)?(?:jarvis[\s,.!]*)?(?:please\s+)?(?:go\s+to\s+sleep|stand\s+down)(?:[\s,.!]+jarvis)?[\s.!]*$/i;
+  // Spoken: any sentence that ENDS in "go to sleep" / "stand down" (a trailing "jarvis", "now" or
+  // "please" allowed), whatever comes before, since the recogniser mangles the greeting ("drivers").
+  // It must end there, so "when I say go to sleep, do X" still reaches him as a request.
+  const SLEEP_RE = /\b(?:go\s+to\s+sleep|stand\s+down)(?:[\s,.!]+(?:jarvis|now|please))*[\s,.!]*$/i;
+  // Typed stays strict: a typed question like "how do I get the baby to go to sleep" is a question.
+  const TYPED_SLEEP_RE = /^\s*(?:(?:hey|yo|ay|aye|ayy)[\s,.!-]+)?(?:jarvis[\s,.!]*)?(?:please\s+)?(?:go\s+to\s+sleep|stand\s+down)(?:[\s,.!]+jarvis)?[\s.!]*$/i;
   const SLEEP_MS = (Number(new URLSearchParams(location.search).get("sleep")) || 60) * 1000;   // ?sleep=N for testing
   let lastActivity = Date.now();
   const touch = () => { lastActivity = Date.now(); };
@@ -1339,7 +1344,7 @@
   }
   function handleTyped(text) {                                  // typing is always deliberate: it wakes him
     touch();
-    if (SLEEP_RE.test(text)) { input.value = ""; return goToSleep(); }
+    if (TYPED_SLEEP_RE.test(text)) { input.value = ""; return goToSleep(); }
     const m = text.match(WAKE_RE);
     const rest = m ? text.slice(m[0].length).trim() : text;
     if (asleep) setAsleep(false);
